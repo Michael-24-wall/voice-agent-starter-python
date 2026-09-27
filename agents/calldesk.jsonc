@@ -37,7 +37,10 @@
       // agent until a result came back.
       // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/overview#execution-modes
       "execution_mode": "interactive",
-      "timeout_seconds": 20,
+      // Raised from 20 to 30: a tunnel round trip measured 9.3-15.9s on a
+      // 0.80 Mbit/s link, so 20 was close to breaching. Revisit once the
+      // endpoint is a real deploy rather than a free tunnel.
+      "timeout_seconds": 30,
 
       "parameters": {
         "type": "object",
@@ -49,15 +52,18 @@
           "urgency": { "type": "string", "enum": ["low", "medium", "high"] }
         },
         "required": ["caller_name", "callback_number", "problem_description", "urgency"]
-      }
+      },
 
-      // NOTE: no "http" block. Without one this is a client-side function tool:
-      // the agent emits tool.call and waits for a tool.result that whoever holds
-      // the session has to send. The browser page only displays tool calls, it
-      // never answers them, so this tool will not complete in a browser tab
-      // either. Adding an "http" block makes AssemblyAI execute it, which is
-      // also the only version that works on a phone call. See
+      // AssemblyAI makes this request, not the browser, so the tool also works
+      // on a phone call. The URL must be a public https address: the API
+      // rejects http:// outright, and 127.0.0.1 or localhost resolve on
+      // AssemblyAI's own servers rather than on this machine. ${CALLDESK_TOOL_URL}
+      // lives in .env so the tunnel hostname can change without editing here.
       // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/http-tools
+      "http": {
+        "url": "${CALLDESK_TOOL_URL}",
+        "http_method": "POST"
+      }
     }
   ]
 }

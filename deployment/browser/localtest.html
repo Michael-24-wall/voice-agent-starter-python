@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<!--
+  Local audio test. No network, no AssemblyAI, no WebSocket: this file only
+  exercises the browser's own audio path so a gap here is a local problem.
+
+  Open it directly from disk. Nothing leaves the machine.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Local audio test</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 2rem; max-width: 40rem; }
+  button { font-size: 1rem; padding: 0.6rem 1.2rem; }
+  #log { font-family: ui-monospace, monospace; font-size: 0.85rem;
+         white-space: pre-wrap; background: #f4f4f4; padding: 0.8rem; }
+</style>
+</head>
+<body>
+<h1>Local audio test</h1>
+<p>Plays three short beeps (440, 660, 880 Hz) then a 2 second 440 Hz tone.
+   Nothing is sent anywhere.</p>
+<button id="play">Play test tone</button>
+<p id="log"></p>
+<script>
+const ctx = new (window.AudioContext || window.webkitAudioContext)();
+const logEl = document.getElementById('log');
+const t0 = performance.now();
+const mark = (m) => {
+  logEl.textContent += `${(performance.now() - t0).toFixed(0).padStart(6)}ms  ${m}\n`;
+};
+
+// One oscillator into a gain node, so each tone starts and stops on its own
+// schedule and the gaps between them are the browser's, not the file's.
+function tone(freq, startAt, seconds, peak) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, startAt);
+  gain.gain.linearRampToValueAtTime(peak, startAt + 0.01);   // short fade in
+  gain.gain.setValueAtTime(peak, startAt + seconds - 0.01);
+  gain.gain.linearRampToValueAtTime(0, startAt + seconds);  // short fade out
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(startAt);
+  osc.stop(startAt + seconds);
+  mark(`scheduled ${freq}Hz for ${seconds}s`);
+}
+
+document.getElementById('play').addEventListener('click', async () => {
+  logEl.textContent = '';
+  mark(`sampleRate requested 24000, got ${ctx.sampleRate}`);
+  await ctx.resume();
+  mark(`state ${ctx.state}, currentTime ${ctx.currentTime.toFixed(3)}`);
+
+  // 0.20s beep, 0.15s gap, three of them, then a 2s tone.
+  const t = ctx.currentTime + 0.1;
+  tone(440, t,        0.20, 0.3);
+  tone(660, t + 0.35, 0.20, 0.3);
+  tone(880, t + 0.70, 0.20, 0.3);
+  tone(440, t + 1.05, 2.00, 0.3);
+
+  const end = t + 3.1;
+  // requestAnimationFrame stops when the tab is hidden, so poll instead.
+  const poll = setInterval(() => {
+    if (ctx.currentTime >= end) {
+      clearInterval(poll);
+      mark('done - total scheduled length 3.2s');
+    }
+  }, 50);
+});
+</script>
+</body>
+</html>

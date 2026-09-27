@@ -46,7 +46,10 @@ def public_agent(agent: dict) -> dict:
     is in here, so a public deployment shows it to anyone who opens the page."""
     copied = copy.deepcopy(agent)
     for tool in copied.get("tools", []):
-        for header in tool.get("http", {}).get("headers", []):
+        # The API returns "http": null on a tool that has no http block, which
+        # is not the same as the key being absent, so `or {}` rather than a
+        # dict default.
+        for header in (tool.get("http") or {}).get("headers", []):
             header["value"] = "<hidden>"
     for llm in copied.get("llm", []):
         llm.pop("api_key", None)
