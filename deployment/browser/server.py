@@ -90,6 +90,25 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(200, PAGE.encode(), "text/html")
 
+    def do_POST(self) -> None:  # noqa: N802
+        # Where the send_summary tool lands. Parses the body, prints the call
+        # details, and confirms. The real SMS send replaces the print.
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        if self.path.split("?")[0] != "/tool/send_summary":
+            self._send(404, b'{"error":"not found"}', "application/json")
+            return
+        try:
+            args = json.loads(raw)
+        except json.JSONDecodeError:
+            self._send(400, b'{"error":"expected a json body"}', "application/json")
+            return
+        if not isinstance(args, dict):
+            self._send(400, b'{"error":"expected a json object"}', "application/json")
+            return
+        print("send_summary " + json.dumps(args, indent=2, sort_keys=True), flush=True)
+        self._send(200, json.dumps({"sent": True}).encode(), "application/json")
+
     def log_message(self, *args) -> None:  # quiet; errors are printed above
         pass
 

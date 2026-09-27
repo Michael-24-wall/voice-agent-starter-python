@@ -1,0 +1,63 @@
+// CallDesk: the inbound call assistant for local service businesses.
+//
+// This file is the request body for POST /v1/agents. There is no wrapper and no
+// field the API does not define. Publish with:
+//
+//     AGENT=calldesk python publish.py
+//
+// https://www.assemblyai.com/docs/voice-agents/voice-agent-api/create-agent
+{
+  // Shown in the AssemblyAI dashboard. The agent is tracked by the
+  // AGENT_ID_CALLDESK in your .env, not by this, so renaming is safe.
+  "name": "CallDesk",
+
+  // Read aloud, so short spoken sentences, no lists, no formatting.
+  // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/prompting-guide
+  "system_prompt": "You are CallDesk, an inbound call assistant for a local service business. Answer questions about hours and services. Collect the caller's name, callback number, problem description, and preferred time. Keep responses under 2 sentences. When you have all four details, call the send_summary tool. Do not make up information you were not given.",
+
+  // Without a greeting the agent says nothing when the call connects, and
+  // silence on a fresh line reads as a dropped call.
+  // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/greeting
+  "greeting": "Thanks for calling. How can I help you today?",
+
+  // Voice catalog: https://www.assemblyai.com/docs/voice-agents/voice-agent-api/voices
+  // alba is US English. Immutable once a session starts, so it only affects
+  // calls that begin after the change.
+  "voice": { "voice_id": "alba" },
+
+  "tools": [
+    {
+      // Read by the model to decide when to call it, so it says when to use
+      // the tool, not just what the tool does.
+      "name": "send_summary",
+      "description": "Send the caller's details to the business owner so they can call back.",
+
+      // interactive keeps the agent talking while the call runs, so a slow or
+      // failing tool never reads as a dropped line. hold would silence the
+      // agent until a result came back.
+      // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/overview#execution-modes
+      "execution_mode": "interactive",
+      "timeout_seconds": 20,
+
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "caller_name": { "type": "string" },
+          "callback_number": { "type": "string" },
+          "problem_description": { "type": "string" },
+          // enum keeps the model to the three buckets instead of inventing one.
+          "urgency": { "type": "string", "enum": ["low", "medium", "high"] }
+        },
+        "required": ["caller_name", "callback_number", "problem_description", "urgency"]
+      }
+
+      // NOTE: no "http" block. Without one this is a client-side function tool:
+      // the agent emits tool.call and waits for a tool.result that whoever holds
+      // the session has to send. The browser page only displays tool calls, it
+      // never answers them, so this tool will not complete in a browser tab
+      // either. Adding an "http" block makes AssemblyAI execute it, which is
+      // also the only version that works on a phone call. See
+      // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/http-tools
+    }
+  ]
+}
