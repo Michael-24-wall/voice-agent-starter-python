@@ -255,11 +255,15 @@ def publish_agent(agent: dict, name: str = "", reuse_by_name: bool = False) -> d
 # --- Twilio -----------------------------------------------------------------
 
 
-def twilio(url: str, form: Optional[dict] = None) -> Any:
+def twilio(url: str, form: Optional[dict] = None, account: str = "", token: str = "") -> Any:
     """Twilio's REST API is form-encoded with basic auth, which is all the
-    standard library needs. No CLI or SDK to install."""
-    account = os.environ.get("TWILIO_ACCOUNT_SID", "")
-    token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    standard library needs. No CLI or SDK to install.
+
+    `account` and `token` default to this app's own credentials. Pass them
+    explicitly to act on a customer's account, which is what a multi-tenant
+    app does after the customer connects through Twilio Connect."""
+    account = account or os.environ.get("TWILIO_ACCOUNT_SID", "")
+    token = token or os.environ.get("TWILIO_AUTH_TOKEN", "")
     auth = base64.b64encode(f"{account}:{token}".encode()).decode()
     headers = {"Authorization": f"Basic {auth}"}
     data = None

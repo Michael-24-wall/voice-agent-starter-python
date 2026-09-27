@@ -1,0 +1,49 @@
+<h1>{{BUSINESS_NAME}}</h1>
+<p class="sub">Signed in as {{EMAIL}}</p>
+
+{{TWILIO_BANNER}}
+
+<div class="grid" style="margin-top:24px">
+  <div class="card">
+    <div class="k">Numbers</div>
+    <div class="v">{{NUMBER_COUNT}}</div>
+    <p class="muted">{{NUMBER_SUMMARY}}</p>
+  </div>
+  <div class="card">
+    <div class="k">Calls logged</div>
+    <div class="v">{{CALL_COUNT}}</div>
+    <p class="muted">This account, all time.</p>
+  </div>
+  <div class="card">
+    <div class="k">Urgent</div>
+    <div class="v">{{URGENT_COUNT}}</div>
+    <p class="muted">Flagged high by the agent.</p>
+  </div>
+</div>
+
+<h2>Phone numbers</h2>
+<div class="panel">
+  {{NUMBERS}}
+  <div class="row" style="margin-top:16px">
+    <a class="btn sm" href="/numbers">Manage numbers</a>
+  </div>
+</div>
+
+<h2>Recent calls</h2>
+<div class="panel">
+  {{RECENT_CALLS}}
+  <div class="row" style="margin-top:16px">
+    <a class="btn sm" href="/calls">View all calls</a>
+  </div>
+</div>
+
+<h2>Try the voice agent</h2>
+<div class="panel">
+  <p class="muted">
+    Opens the browser voice UI in a new tab. The agent uses the browser microphone,
+    so it answers a call in your own voice rather than over Twilio.
+  </p>
+  <div class="row" style="margin-top:14px">
+    <a class="btn primary" href="/talk" target="_blank" rel="noopener">Talk to CallDesk</a>
+  </div>
+</div>
