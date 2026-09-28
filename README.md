@@ -46,8 +46,30 @@ The agent's behaviour is entirely in [agents/calldesk.jsonc](agents/calldesk.jso
 - **Each user binds their own numbers.** `POST /v1/phone-numbers/import` registers a number with AssemblyAI, then `PUT /v1/phone-numbers/{number}/agent` attaches the agent to it.
 - **Each user sees only their own calls.** Every `send_summary` call is filed against the account that owns the receiving number, and the dashboard and call log are scoped to that account.
 - **Twilio bills the customer directly** for their own number and for call usage. CallDesk is an application on top of it and never touches telecom billing.
+- **Sign in with a password or Google.** A Google sign-in whose email already matches a password account links to it rather than creating a duplicate, so call history is never orphaned.
 
 Storage is SQLite at `data/calldesk.db` (gitignored): `users`, `sessions`, `twilio_connections`, `phone_numbers`, `calls`. [auth.py](auth.py) does PBKDF2-SHA256 password hashing; session tokens live in the `sessions` table, so a restart does not log anyone out.
+
+Customers sign in with a password or with Google, and either way they land in the same `users` row. A Google account whose email already matches a password account is linked to it instead of creating a second one, so signing up twice does not orphan call history. [google_auth.py](google_auth.py) handles the handshake.
+
+## Google OAuth Setup
+
+One-time setup, in the Google Cloud Console:
+
+1. Open **APIs & Services -> Credentials**. Create a project first if you have none.
+2. **Create credentials -> OAuth client ID**.
+3. Choose **Web application** under Application type. The consent screen name is what customers see.
+4. Under **Authorized redirect URIs**, add exactly:
+   `https://your-app.onrender.com/auth/google/callback`
+   The scheme, host, port and path must match character for character. `localhost` is not accepted by Google, so local sign-in needs `http://localhost:3000` added as a second URI and `CALLDESK_BASE_URL` left unset locally.
+5. Copy the **Client ID** and **Client secret** into `.env`:
+   ```sh
+   GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=...
+   ```
+6. Keep `CALLDESK_BASE_URL` set to your public origin. `google_auth.py` derives the redirect URI from it.
+
+If either value is missing, the **Continue with Google** button says so on the page instead of failing silently. Bad state, a declined consent screen, and a failed token exchange all return to the login page with a readable reason. State tokens are single-use and expire after ten minutes.
 
 ## Twilio Connect Setup
 
@@ -62,13 +84,15 @@ Also in `.env`, for this instance:
 
 ```sh
 TWILIO_ACCOUNT_SID=AC...            # yours, from the console dashboard
-TWILIO_AUTH_TOKEN=...              # yours, reads the customer's number list
+TWILIO_AUTH_TOKEN=...              # yours, reads the customer's number list (see the note below)
 CALLDESK_BASE_URL=https://your-app.onrender.com
 AGENT_ID_CALLDESK=agent_...        # written by publish.py
 TWILIO_TRUNK_DOMAIN=...            # the SIP trunk, gates /numbers/bind
 ```
 
 `CALLDESK_BASE_URL` must be reachable from Twilio. `localhost` will not do.
+
+**Known limitation.** Reading a customer's number list uses your `TWILIO_AUTH_TOKEN` alongside their `AccountSid`. That authenticates successfully only when the customer is a subaccount of yours. A genuinely unrelated Twilio account rejects it with `20003 Authentication Error`, and that error is shown on the page. Supporting arbitrary accounts means exchanging Twilio Connect's authorization code for an OAuth token and storing it per user; `twilio_connections` currently holds only `account_sid`, so that column is the place it would go.
 
 ## Answering Modes
 
@@ -92,8 +116,7 @@ So CallDesk is the fallback: 20 seconds for you, then the agent. The bin is crea
 ## Run locally
 
 ```sh
-cp .env.example .env      # add ASSEMBLYAI_API_KEY
-python seed.py            # demo account, safe to re-run
+cp .env.example .env      # ASSEMBLYAI_API_KEY, plus CALLDESK_BASE_URL to sign in with Google
 AGENT=calldesk python publish.py
 AGENT=calldesk python deployment/browser/server.py
 ```
@@ -101,18 +124,12 @@ AGENT=calldesk python deployment/browser/server.py
 - <http://localhost:3000> &mdash; the site
 - <http://localhost:3000/talk> &mdash; the voice agent, browser microphone
 
+There is no demo account and no seeded data. The first account to sign up owns
+the database, and every later signup gets its own isolated rows. Create one at
+<http://localhost:3000/signup> with an email and password, or with Google if
+`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set.
+
 `send_summary` is an HTTP tool, so its URL must be a public https address AssemblyAI can reach. Put a tunnel URL in `CALLDESK_TOOL_URL` in `.env` and re-run `publish.py` whenever it changes.
-
-## Demo account
-
-| | |
-|---|---|
-| Email | `demo@calldesk.test` |
-| Password | `demo1234` |
-| Business | Demo Plumbing Co. |
-| Mobile | `+15551234567` |
-
-Seeded with a bound number and two sample calls. Re-running `seed.py` leaves the password alone.
 
 ## Tech stack
 
@@ -121,9 +138,15 @@ Seeded with a bound number and two sample calls. Re-running `seed.py` leaves the
 | Runtime | Python 3.9+, standard library only, no dependencies |
 | Database | SQLite via `sqlite3` |
 | Voice | [AssemblyAI Voice Agent API](https://www.assemblyai.com/products/voice-agent-api) |
-| LLM | AssemblyAI LLM Gateway, opt-in through an `llm` block in an agent file |
+| LLM | AssemblyAI's own model by default; LLM Gateway is opt-in through an `llm` block in an agent file |
 | Telephony | [Twilio](https://www.twilio.com) SIP trunks, TwiML Bin, and [Twilio Connect](https://www.twilio.com/docs/connect) |
+| Sign-in | Email and password, plus Google OAuth 2.0 |
 | Frontend | Server-rendered HTML from `templates/`, no build step |
+
+No `pip install` is needed to run any of this. `google_auth.py` verifies Google
+sign-ins through Google's own token and userinfo endpoints rather than pulling
+in `google-auth`, and Twilio REST calls go through `lib.py` rather than the
+`twilio` SDK.
 
 ---
 

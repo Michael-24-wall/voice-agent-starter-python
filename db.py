@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY,
     email         TEXT UNIQUE,
     password_hash TEXT,
+    google_id     TEXT UNIQUE,
     business_name TEXT,
     mobile_number TEXT,
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -108,6 +109,11 @@ def _migrate(conn):
         return
 
     _add_column(conn, "users", "mobile_number", "TEXT")
+    _add_column(conn, "users", "google_id", "TEXT")
+    # IF NOT EXISTS, so this is a no-op on a fresh database where the column
+    # already carries UNIQUE.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users (google_id)")
 
     # phone_numbers gained answering_mode and forward_to.
     if _table_exists(conn, "phone_numbers"):
@@ -193,6 +199,45 @@ def first_user():
     with connect() as conn:
         row = conn.execute("SELECT * FROM users ORDER BY id LIMIT 1").fetchone()
     return dict(row) if row else None
+
+
+def get_user_by_google_id(google_id):
+    if not google_id:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE google_id = ?", (str(google_id).strip(),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def link_google_id(user_id, google_id):
+    with connect() as conn:
+        conn.execute(
+            "UPDATE users SET google_id = ? WHERE id = ?",
+            (str(google_id).strip(), int(user_id)),
+        )
+
+
+def find_or_create_google_user(email, google_id, business_name=""):
+    """Sign a Google identity in, linking to an existing account if the email
+    matches one. A Google-only account stores password_hash='' so it can never
+    be signed into with a password.
+    """
+    email = (email or "").strip().lower()
+    existing = get_user_by_google_id(google_id) or get_user_by_email(email)
+    if existing:
+        if not (existing.get("google_id") or "").strip():
+            link_google_id(existing["id"], google_id)
+            print(f"google: linked {email} to existing account "
+                  f"{existing['id']}", flush=True)
+        return get_user_by_id(existing["id"])
+    # No business_name from Google beyond the profile name, so derive one.
+    name = (business_name or "").strip() or (email.split("@")[0] if email else "New account")
+    user_id = create_user(email, "", name, None)
+    link_google_id(user_id, google_id)
+    print(f"google: created account {email} ({user_id})", flush=True)
+    return get_user_by_id(user_id)
 
 
 def update_user_profile(user_id, business_name=None, mobile_number=None):

@@ -2,11 +2,17 @@
   <h1>Create your account</h1>
   <p class="sub">Set up your business in under a minute.</p>
   {{ERROR}}
-  <form method="post" action="/signup" class="panel" style="margin-top:18px">
+
+  <a class="btn google" href="/auth/google">{{GOOGLE_MARK}}Continue with Google</a>
+  {{GOOGLE_HINT}}
+
+  <div class="or"><span>or with email</span></div>
+
+  <form method="post" action="/signup" class="panel">
     <div class="field">
       <label for="business_name">Business name</label>
       <input type="text" id="business_name" name="business_name" required
-             placeholder="Demo Plumbing Co." value="{{BUSINESS_NAME}}">
+             placeholder="Acme Plumbing" value="{{BUSINESS_NAME}}">
     </div>
     <div class="field">
       <label for="email">Work email</label>
@@ -17,6 +23,14 @@
       <label for="password">Password</label>
       <input type="password" id="password" name="password" required
              placeholder="At least 8 characters" minlength="8">
+    </div>
+    <div class="field">
+      <label for="mobile_number">Mobile number</label>
+      <input type="tel" id="mobile_number" name="mobile_number"
+             placeholder="+15551234567" value="{{MOBILE_NUMBER}}">
+      <p class="hint">
+        Used by Answering Mode B to ring your phone first. You can add it later.
+      </p>
     </div>
     <button class="btn primary" type="submit">Create account</button>
     <p class="muted" style="margin-top:16px;font-size:14px">

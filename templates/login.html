@@ -2,7 +2,13 @@
   <h1>Log in</h1>
   <p class="sub">Welcome back.</p>
   {{ERROR}}
-  <form method="post" action="/login" class="panel" style="margin-top:18px">
+
+  <a class="btn google" href="/auth/google">{{GOOGLE_MARK}}Continue with Google</a>
+  {{GOOGLE_HINT}}
+
+  <div class="or"><span>or with email</span></div>
+
+  <form method="post" action="/login" class="panel">
     <div class="field">
       <label for="email">Work email</label>
       <input type="email" id="email" name="email" required value="{{EMAIL}}"
@@ -18,9 +24,4 @@
       No account yet? <a href="/signup">Sign up</a>
     </p>
   </form>
-
-  <div class="note" style="margin-top:20px">
-    <b>Demo account</b><br>
-    <span class="mono">demo@calldesk.test</span> / <span class="mono">demo1234</span>
-  </div>
 </div>

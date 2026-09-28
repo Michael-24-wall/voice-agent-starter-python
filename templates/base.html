@@ -100,6 +100,26 @@
   input:focus { outline: none; border-color: var(--accent); }
   .field { margin-bottom: 16px; }
   .auth { max-width: 400px; margin: 40px auto; }
+  .hint { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+
+  /* Google sign-in. Keep Google's mark next to the word, or it reads as a
+     generic button. */
+  .btn.google {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; background: #fff; border-color: #fff; color: #1f2937;
+    font-weight: 600;
+  }
+  .btn.google:hover { background: #e8eaed; border-color: #e8eaed; color: #1f2937; }
+  .btn.google svg { flex: none; }
+
+  .or {
+    display: flex; align-items: center; gap: 12px; margin: 22px 0;
+    color: var(--muted); font-size: 12px; text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+  .or::before, .or::after {
+    content: ""; flex: 1; height: 1px; background: var(--border);
+  }
 
   /* tables */
   table { width: 100%; border-collapse: collapse; font-size: 14px; }

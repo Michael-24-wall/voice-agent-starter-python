@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 
 import auth  # noqa: E402
 import db  # noqa: E402
+import google_auth  # noqa: E402
 import twilio_connect as tc  # noqa: E402
 from lib import (ApiError, aai, load_env, publish_agent, read_agent,  # noqa: E402
                  required, stored_agent_id)
@@ -136,6 +137,38 @@ def nav_for(user) -> str:
             "</nav>"
         )
     return '<nav><a href="/login">Log in</a><a href="/signup">Sign up</a></nav>'
+
+
+GOOGLE_MARK = (
+    '<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">'
+    '<path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C36.1 2.6 30.5.5 24 .5'
+    ' 14.6.5 6.5 5.9 2.6 13.8l7.8 6c1.9-5.6 7-9.3 13.6-9.3z"/>'
+    '<path fill="#4285F4" d="M46.98 24.55c0-1.6-.15-3.15-.42-4.65H24v8.8h12.94'
+    'c-.58 2.9-2.26 5.36-4.82 7.01l7.73 6c4.51-4.17 7.13-10.32 7.13-17.16z"/>'
+    '<path fill="#FBBC05" d="M10.38 28.2A14.5 14.5 0 0 1 9.6 24c0-1.5.26-2.9.78-4.2l-7.8-6'
+    'C.87 17.2 0 20.4 0 24c0 3.6.87 6.8 2.56 9.8z"/>'
+    '<path fill="#34A853" d="M24 47.5c6.2 0 11.5-2 15.4-5.6l-7.7-6c-2.1 1.4-4.8 2.3-7.7 2.3'
+    '-6.6 0-12.2-4.4-14.2-10.4l-7.8 6C6.5 42.1 14.6 47.5 24 47.5z"/>'
+    "</svg>"
+)
+
+
+def google_hint():
+    """Shown under the Google button when the OAuth client is not set up, so
+    the button never leads to a dead end."""
+    if google_auth.configured():
+        return ""
+    return note(
+        "Google sign-in is not set up yet. Add GOOGLE_CLIENT_ID and "
+        "GOOGLE_CLIENT_SECRET to .env to enable it.", "warn")
+
+
+def google_login_page(message="", status=400):
+    """The login page, carrying a Google failure back to the customer."""
+    return page("login.html", "Log in", nav_for(None),
+                ERROR=error_box(message) if message else "",
+                GOOGLE_HINT=google_hint())
+
 
 
 def note(text, kind=""):
@@ -275,6 +308,7 @@ PAGE = ""
 # are deliberately absent: they are real POST routes.
 GET_ONLY = {"/", "/dashboard", "/numbers", "/calls", "/talk",
             "/connect/twilio", "/connect/twilio/callback",
+            "/auth/google", "/auth/google/callback",
             "/twiml/fallback", "/twiml/outbound", "/app.js",
             "/token", "/agent"}
 
@@ -315,8 +349,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.parse_qs(raw.decode("utf-8", "replace"))
         return {k: v[0] for k, v in parsed.items()}
 
-    def _query(self):
-        return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+    def _host(self):
+        """The host the customer reached us on. Only a fallback for the Google
+        redirect URI when CALLDESK_BASE_URL is unset, which is not safe to
+        trust from a header in production."""
+        return self.headers.get("Host") or ""
+
+    def _query(self):        return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
 
     def _one(self, key):
         return (self._query().get(key) or [""])[0]
@@ -386,7 +425,9 @@ class Handler(BaseHTTPRequestHandler):
             if self._user():
                 self._redirect("/dashboard")
                 return
-            self._html(page("login.html", "Log in", nav_for(None), EMAIL=self._one("email")))
+            self._html(page("login.html", "Log in", nav_for(None),
+                            EMAIL=self._one("email"),
+                            GOOGLE_HINT=google_hint()))
             return
 
         if path == "/signup":
@@ -396,7 +437,16 @@ class Handler(BaseHTTPRequestHandler):
             self._html(page("signup.html", "Sign up", nav_for(None),
                             EMAIL=self._one("email"),
                             BUSINESS_NAME=self._one("business_name"),
-                            MOBILE_NUMBER=self._one("mobile_number")))
+                            MOBILE_NUMBER=self._one("mobile_number"),
+                            GOOGLE_HINT=google_hint()))
+            return
+
+        if path == "/auth/google":
+            self._google_start()
+            return
+
+        if path == "/auth/google/callback":
+            self._google_callback()
             return
 
         if path == "/dashboard":
@@ -472,6 +522,15 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             return
         number = self._one("number")
+        if not number:
+            # The dashboard links here without a number, so fall back to the
+            # first bound one instead of bouncing to /numbers with an error.
+            bound = db.list_phone_numbers(user["id"])
+            if not bound:
+                self._redirect(
+                    "/numbers?error=Bind+a+number+before+setting+an+answering+mode.")
+                return
+            number = bound[0]["phone_number"]
         row = db.get_phone_number(user["id"], number)
         if not row:
             self._redirect("/numbers?error=That+number+is+not+on+your+account.")
@@ -586,6 +645,56 @@ class Handler(BaseHTTPRequestHandler):
         self._html(page(template, title, nav, ERROR=error_box(message), **values),
                    status=status)
 
+    def _google_start(self) -> None:
+        """Send the customer to Google's consent screen.
+
+        A signed-in customer is passed through rather than bounced to /login:
+        the state carries their user id so the callback knows who is arriving.
+        """
+        try:
+            user = self._user()
+            state = str(user["id"]) if user else ""
+            url = google_auth.get_google_auth_url(state, self._host())
+        except google_auth.GoogleAuthError as err:
+            self._html(google_login_page(str(err)), status=400)
+            return
+        self._redirect(url)
+
+    def _google_callback(self) -> None:
+        """Google sends ?code= and ?state=. State is single-use and expires."""
+        params = self._query()
+        if params.get("error"):
+            reason = (params.get("error_description")
+                      or "Google sign-in was cancelled.")[:200]
+            self._html(google_login_page(f"Google sign-in failed. {reason}"),
+                       status=400)
+            return
+        try:
+            # Burn the state token before anything else, so a replayed callback
+            # cannot mint a second session.
+            google_auth.consume_state(params.get("state"))
+            profile = google_auth.exchange_code_for_user(
+                params.get("code"), self._host())
+            user = google_auth.find_or_create_google_user(
+                profile["email"], profile["google_id"], profile.get("name", ""))
+        except google_auth.GoogleAuthError as err:
+            self._html(google_login_page(str(err)), status=400)
+            return
+        except Exception as err:  # noqa: BLE001 - never 500 on a bad callback
+            print(f"google callback failed: {err!r}", flush=True)
+            self._html(google_login_page(
+                "Google sign-in could not be completed. Please try again."),
+                status=400)
+            return
+        if not user:
+            self._html(google_login_page(
+                "That Google account could not be set up. Please try again."),
+                status=400)
+            return
+        self._redirect("/dashboard",
+                       {"Set-Cookie": auth.set_cookie(auth.create_session(user["id"]))},
+                       status=303)
+
     def _signup(self, form) -> None:
         email = (form.get("email") or "").strip().lower()
         password = form.get("password") or ""
@@ -674,6 +783,19 @@ class Handler(BaseHTTPRequestHandler):
         self._redirect(f"/settings/answering?number={urllib.parse.quote(number)}"
                        f"&ok={urllib.parse.quote('Saved ' + label)}")
 
+    def _own_number(self, user, requested=""):
+        """The Twilio number to place a call from.
+
+        The posted value is only a hint. Anything not bound to this account is
+        discarded, because otherwise a customer could dial out from a number
+        they do not own by editing a hidden form field.
+        """
+        bound = [row["phone_number"] for row in db.list_phone_numbers(user["id"])]
+        if not bound:
+            return ""
+        wanted = (requested or "").strip()
+        return wanted if wanted in bound else bound[0]
+
     def _call_back(self, form) -> None:
         """Call a missed caller back, letting CallDesk speak first."""
         user = self._require_user()
@@ -691,10 +813,7 @@ class Handler(BaseHTTPRequestHandler):
         if not conn:
             self._redirect("/calls?error=Connect+Twilio+before+calling+callers+back.")
             return
-        from_number = (form.get("from_number") or "").strip()
-        if not from_number:
-            numbers = db.list_phone_numbers(user["id"])
-            from_number = numbers[0]["phone_number"] if numbers else ""
+        from_number = self._own_number(user, form.get("from_number"))
         if not from_number:
             self._redirect("/calls?error=Bind+a+phone+number+before+calling+back.")
             return
