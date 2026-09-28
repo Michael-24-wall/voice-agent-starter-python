@@ -1,35 +1,77 @@
 <section class="hero">
-  <h1>Never miss a call<br>you can't answer.</h1>
-  <p>CallDesk is a voice AI receptionist for local service businesses. It answers
-  calls, collects caller details, and notifies the owner.</p>
-  <div class="row">
-    <a class="btn primary" href="/signup">Start free</a>
-    <a class="btn" href="/login">Log in</a>
+  <div>
+    <h1>Your AI receptionist for local service businesses</h1>
+    <p class="lede">CallDesk answers when you can't, collects caller details, and notifies you instantly.</p>
+    <div class="row">
+      <a class="btn btn-primary btn-lg" href="/signup">Get started free</a>
+      <a class="btn btn-secondary btn-lg" href="/login">Sign in</a>
+    </div>
+  </div>
+
+  <div class="mock-call" aria-hidden="true">
+    <div class="card">
+      <div class="mock-head">
+        <span class="dot"></span>
+        <span class="who">+1 (555) 014-2233</span>
+        <span class="len">0:42</span>
+      </div>
+      <div class="mock-body">
+        <div class="bubble agent">Thanks for calling City Plumbing, this is CallDesk. Who am I speaking with?</div>
+        <div class="bubble you">Hi, this is Dana Wu. My kitchen sink is leaking and it's getting worse.</div>
+        <div class="bubble agent">Sorry to hear that, Dana. Is this urgent, or can it wait until tomorrow?</div>
+        <div class="bubble you">It's urgent, water is pooling under the cabinets.</div>
+        <div class="bubble agent">Got it. What's the best number to reach you on?</div>
+        <div class="bubble you">+1 (555) 889-9911</div>
+      </div>
+      <div class="mock-foot">
+        <span class="badge badge-danger">high urgency</span>
+        <span>Kitchen sink leaking</span>
+        <span class="grow"></span>
+        <span class="mono">$0.001</span>
+      </div>
+    </div>
   </div>
 </section>
 
-<h2>What it does</h2>
-<div class="grid">
-  <div class="card"><div class="k">Answers</div><div class="v">24/7</div>
-    <p class="muted">Picks up on the first ring, day or night.</p></div>
-  <div class="card"><div class="k">Collects</div><div class="v">Details</div>
-    <p class="muted">Name, callback number, the problem, and how urgent it is.</p></div>
-  <div class="card"><div class="k">Logs</div><div class="v">Every call</div>
-    <p class="muted">Filed to your dashboard the moment the agent hangs up.</p></div>
-</div>
+<section class="feature-grid">
+  <div class="card card-hover">
+    <div class="feature-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/>
+      </svg>
+    </div>
+    <h3>Answers every call</h3>
+    <p class="muted">CallDesk picks up when you're on a job site, under a sink, or with another customer.</p>
+  </div>
 
-<h2>How it works</h2>
-<div class="panel">
-  <p class="mono" style="line-height:2;color:var(--text-muted)">
-    Caller &rarr; Twilio &rarr; AssemblyAI Voice Agent &rarr; send_summary tool<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&rarr; CallDesk server &rarr; owner notification
-  </p>
-  <p class="muted" style="margin-top:14px">
-    Twilio bills you directly for the call. CallDesk never touches telecom billing.
-  </p>
-</div>
+  <div class="card card-hover">
+    <div class="feature-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+      </svg>
+    </div>
+    <h3>Collects the details</h3>
+    <p class="muted">Name, callback number, problem, urgency. Captured and stored automatically.</p>
+  </div>
 
-<div class="note" style="margin-top:28px">
-  <b>Already set up?</b> <a href="/login">Log in</a>, or
-  <a href="/auth/google">continue with Google</a>.
-</div>
+  <div class="card card-hover">
+    <div class="feature-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1 4v6h6"/><path d="M3.5 15a9 9 0 1 0 2.1-9.4L1 10"/>
+      </svg>
+    </div>
+    <h3>Call back with context</h3>
+    <p class="muted">See every call with the full transcript. One tap to call back.</p>
+  </div>
+</section>
+
+<section class="card" style="margin-top:20px">
+  <div class="card-title">How it works</div>
+  <div class="row-between">
+    <p class="muted grow" style="max-width:520px">
+      Twilio Connect brings your number in, the AssemblyAI Voice Agent API answers it,
+      and every call lands in your log with the transcript attached.
+    </p>
+    <a class="btn btn-primary" href="/signup">Get started free</a>
+  </div>
+</section>

@@ -3,202 +3,126 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
 <title>{{TITLE}} &middot; CallDesk</title>
-<style>
-  :root {
-    --page-bg: #070b14;
-    --panel: #1a2438;
-    --panel-alt: #131c2c;
-    --border: #2a3852;
-    --border-strong: #3b4d6b;
-    --accent: #5eead4;
-    --accent-dim: #2dd4bf;
-    --text: #e2e8f0;
-    --text-muted: #8b9ab4;
-    --text-faint: #5c6b85;
-    --high: #f87171;
-    --medium: #fbbf24;
-    --low: #4ade80;
-    --radius: 10px;
-    --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
-    --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", monospace;
-  }
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: var(--font-body); font-size: 15px; line-height: 1.55;
-    color: var(--text); background: var(--page-bg);
-    min-height: 100vh; display: flex; flex-direction: column;
-  }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-
-  /* layout */
-  .wrap { width: 100%; max-width: 960px; margin: 0 auto; padding: 0 20px; }
-  header.site {
-    border-bottom: 1px solid var(--border); background: var(--panel-alt);
-    position: sticky; top: 0; z-index: 10;
-  }
-  header.site .wrap {
-    display: flex; align-items: center; gap: 20px; height: 60px;
-  }
-  .brand { font-weight: 600; font-size: 17px; color: var(--text); letter-spacing: -.2px; }
-  .brand span { color: var(--accent); }
-  nav { margin-left: auto; display: flex; align-items: center; gap: 18px; }
-  nav a { color: var(--text-muted); font-size: 14px; }
-  nav a:hover, nav a.on { color: var(--accent); text-decoration: none; }
-  nav form { margin: 0; }
-  main { flex: 1; padding: 32px 0 64px; }
-  h1 { font-size: 26px; font-weight: 600; letter-spacing: -.5px; margin-bottom: 4px; }
-  h2 {
-    font-size: 13px; text-transform: uppercase; letter-spacing: 1.1px;
-    color: var(--text-faint); font-family: var(--font-mono);
-    font-weight: 500; margin: 28px 0 12px;
-  }
-  .sub { color: var(--text-muted); margin-bottom: 8px; }
-  .muted { color: var(--text-muted); }
-  .mono { font-family: var(--font-mono); font-size: 13px; }
-
-  /* panels + cards */
-  .panel {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 22px;
-  }
-  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
-  .card {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 18px;
-  }
-  .card .k {
-    font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
-    letter-spacing: 1px; color: var(--text-faint);
-  }
-  .card .v { font-size: 22px; font-weight: 600; margin-top: 6px; }
-
-  /* buttons */
-  .btn {
-    display: inline-block; padding: 9px 16px; border-radius: 7px;
-    border: 1px solid var(--border-strong); background: var(--panel);
-    color: var(--text); font-size: 14px; font-family: var(--font-body);
-    cursor: pointer; text-decoration: none;
-  }
-  .btn:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
-  .btn.primary {
-    background: var(--accent); border-color: var(--accent);
-    color: #06231f; font-weight: 600;
-  }
-  .btn.primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); color: #06231f; }
-  .btn.sm { padding: 5px 11px; font-size: 13px; }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-
-  /* forms */
-  label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 6px; }
-  input[type=text], input[type=email], input[type=password], input[type=tel] {
-    width: 100%; padding: 10px 12px; border-radius: 7px;
-    border: 1px solid var(--border-strong); background: var(--panel-alt);
-    color: var(--text); font-size: 15px; font-family: var(--font-body);
-  }
-  input:focus { outline: none; border-color: var(--accent); }
-  .field { margin-bottom: 16px; }
-  .auth { max-width: 400px; margin: 40px auto; }
-  .hint { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
-
-  /* Google sign-in. Keep Google's mark next to the word, or it reads as a
-     generic button. */
-  .btn.google {
-    display: flex; align-items: center; justify-content: center; gap: 10px;
-    width: 100%; background: #fff; border-color: #fff; color: #1f2937;
-    font-weight: 600;
-  }
-  .btn.google:hover { background: #e8eaed; border-color: #e8eaed; color: #1f2937; }
-  .btn.google svg { flex: none; }
-
-  .or {
-    display: flex; align-items: center; gap: 12px; margin: 22px 0;
-    color: var(--muted); font-size: 12px; text-transform: uppercase;
-    letter-spacing: .08em;
-  }
-  .or::before, .or::after {
-    content: ""; flex: 1; height: 1px; background: var(--border);
-  }
-
-  /* tables */
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th {
-    text-align: left; font-family: var(--font-mono); font-size: 11px;
-    text-transform: uppercase; letter-spacing: 1px; color: var(--text-faint);
-    font-weight: 500; padding: 0 10px 8px; border-bottom: 1px solid var(--border);
-  }
-  td { padding: 11px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  tr:last-child td { border-bottom: none; }
-  .empty { color: var(--text-faint); padding: 20px 0; font-style: italic; }
-
-  /* urgency pills */
-  .pill {
-    display: inline-block; padding: 2px 9px; border-radius: 20px;
-    font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
-    letter-spacing: .6px; border: 1px solid;
-  }
-  .pill.high { color: var(--high); border-color: var(--high); }
-  .pill.medium { color: var(--medium); border-color: var(--medium); }
-  .pill.low { color: var(--low); border-color: var(--low); }
-  .pill.ok { color: var(--accent); border-color: var(--accent); }
-  .pill.off { color: var(--text-faint); border-color: var(--border-strong); }
-
-  .note {
-    background: rgba(94, 234, 212, .07); border: 1px solid var(--accent);
-    border-radius: var(--radius); padding: 14px 16px; font-size: 14px;
-    color: var(--text); margin-bottom: 20px;
-  }
-  .warn { background: rgba(251, 191, 36, .07); border-color: var(--medium); }
-  .err { background: rgba(248, 113, 113, .08); border-color: var(--high); }
-  .note b { color: var(--accent); }
-  .warn b { color: var(--medium); }
-  .err b { color: var(--high); }
-
-  details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
-  details .transcript {
-    margin-top: 10px; padding: 12px; background: var(--panel-alt);
-    border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0;
-    font-size: 14px; color: var(--text-muted); white-space: pre-wrap;
-  }
-  .steps { counter-reset: s; list-style: none; margin: 16px 0 0; }
-  .steps li { counter-increment: s; padding-left: 34px; position: relative; margin-bottom: 12px; }
-  .steps li::before {
-    content: counter(s); position: absolute; left: 0; top: -1px;
-    width: 22px; height: 22px; border-radius: 50%; background: var(--panel);
-    border: 1px solid var(--accent); color: var(--accent);
-    display: flex; align-items: center; justify-content: center;
-    font-family: var(--font-mono); font-size: 11px;
-  }
-  .hero { text-align: center; padding: 48px 0 24px; }
-  .hero h1 { font-size: 38px; line-height: 1.15; margin-bottom: 14px; }
-  .hero p { color: var(--text-muted); font-size: 17px; max-width: 560px; margin: 0 auto; }
-  .hero .row { justify-content: center; margin-top: 28px; }
-  footer.site {
-    border-top: 1px solid var(--border); padding: 18px 0;
-    color: var(--text-faint); font-size: 13px;
-  }
-  @media (max-width: 600px) {
-    header.site .wrap { flex-wrap: wrap; height: auto; padding: 12px 0; gap: 12px; }
-    nav { margin-left: 0; gap: 12px; flex-wrap: wrap; }
-    .hero h1 { font-size: 30px; }
-  }
-</style>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%235eead4'/><path d='M8 20h3l2-7 2 11 2-9 1.5 5H24' fill='none' stroke='%2304231e' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
 <body>
-<header class="site">
-  <div class="wrap">
-    <a href="/" class="brand">Call<span>Desk</span></a>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="app-header">
+  <div class="bar">
+    <a href="/" class="logo" aria-label="CallDesk home">
+      <span class="logo-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 13h3l2.5-8 3 16 3-12 2 6h4.5"/>
+        </svg>
+      </span>
+      <span class="logo-word">CallDesk</span>
+    </a>
     {{NAV}}
   </div>
 </header>
-<main>
-  <div class="wrap">
+
+<main class="shell" id="main">
 {{CONTENT}}
-  </div>
 </main>
-<footer class="site">
-  <div class="wrap">CallDesk &middot; voice AI receptionist for local service businesses</div>
+
+<footer class="app-footer">
+  <div class="bar">
+    <span>Built on AssemblyAI Voice Agent API &middot; Twilio Connect &middot; Runs on Vultr</span>
+    <span>&copy; CallDesk</span>
+  </div>
 </footer>
+
+<div class="toast-stack" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // --- user menu ---------------------------------------------------------
+  var menu = document.querySelector(".user-menu");
+  var button = menu && menu.querySelector(".user-button");
+  if (button) {
+    button.addEventListener("click", function (event) {
+      event.stopPropagation();
+      var open = menu.classList.toggle("open");
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    document.addEventListener("click", function () {
+      menu.classList.remove("open");
+      button.setAttribute("aria-expanded", "false");
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") { menu.classList.remove("open"); }
+    });
+  }
+
+  // --- mobile nav --------------------------------------------------------
+  var burger = document.getElementById("nav-toggle");
+  var nav = document.getElementById("primary-nav");
+  if (burger && nav) {
+    burger.addEventListener("click", function () {
+      var open = nav.classList.toggle("open");
+      burger.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+  }
+
+  // --- active nav link, from the current path ----------------------------
+  var here = location.pathname.replace(/\/$/, "") || "/";
+  var links = document.querySelectorAll("#primary-nav a");
+  for (var i = 0; i < links.length; i++) {
+    var path = links[i].getAttribute("href").split("?")[0].replace(/\/$/, "") || "/";
+    if (path === here || (path !== "/" && here.indexOf(path) === 0)) {
+      links[i].classList.add("active");
+      links[i].setAttribute("aria-current", "page");
+    }
+  }
+
+  // --- toasts ------------------------------------------------------------
+  var stack = document.getElementById("toasts");
+
+  function dismiss(node) {
+    node.classList.add("is-leaving");
+    setTimeout(function () { node.remove(); }, 200);
+  }
+
+  window.callDeskToast = function (message, kind) {
+    if (!stack || !message) { return; }
+    var node = document.createElement("div");
+    node.className = kind === "danger" ? "toast toast-danger" : "toast";
+    node.setAttribute("role", kind === "danger" ? "alert" : "status");
+    var text = document.createElement("div");
+    text.className = "grow";
+    text.textContent = message;
+    var close = document.createElement("button");
+    close.className = "x";
+    close.type = "button";
+    close.setAttribute("aria-label", "Dismiss notification");
+    close.textContent = "\u00d7";
+    close.addEventListener("click", function () { dismiss(node); });
+    node.append(text, close);
+    stack.append(node);
+    setTimeout(function () { dismiss(node); }, 4000);
+  };
+
+  // A flash written by the server right before a redirect.
+  var FLASH = "calldesk_flash";
+  document.cookie.split("; ").forEach(function (pair) {
+    var eq = pair.indexOf("=");
+    if (eq < 0) { return; }
+    var name = pair.slice(0, eq);
+    if (name !== FLASH) { return; }
+    var raw = pair.slice(eq + 1);
+    try { raw = decodeURIComponent(raw); } catch (err) { /* keep raw */ }
+    var sep = raw.indexOf("|");
+    window.callDeskToast(sep < 0 ? raw : raw.slice(sep + 1),
+                         sep > 0 && raw.slice(0, sep) === "danger" ? "danger" : "ok");
+    document.cookie = FLASH + "=; Path=/; Max-Age=0; SameSite=Lax";
+  });
+})();
+</script>
 </body>
 </html>

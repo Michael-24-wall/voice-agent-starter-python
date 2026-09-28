@@ -1,45 +1,47 @@
-"""Google OAuth 2.0 sign-in. Standard library only, no pip install.
+"""Google OAuth 2.0 sign-in, using google-auth and google-auth-oauthlib.
 
-Why no google-auth: verifying a JWT signature needs RSA, which the standard
-library does not implement. google-auth exists for exactly that. Rather than
-add a dependency, this verifies the token Google's own introspection endpoint
-already validated, and reads the profile from Google's userinfo endpoint.
-
-  code  -> POST https://oauth2.googleapis.com/token  -> access_token
-  access_token -> GET https://www.googleapis.com/oauth2/v3/userinfo -> {email, sub}
-
-The access token came from Google over TLS in exchange for our client secret, so
-the userinfo response for it is authentic. That is the same guarantee the
-audience and signature checks would give, with nothing to install.
+The authorization-code flow: build a consent URL, trade the returned code for
+tokens, then verify the ID token and read the profile out of it.
 
 Reference: https://developers.google.com/identity/protocols/oauth2/web-server
 """
 
-import json
 import os
 import secrets
-import urllib.error
-import urllib.parse
-import urllib.request
+import time
+import uuid
 
-# Where `state` lives between the redirect out and the callback back. A short
-# TTL keeps the table from growing without bound.
+import requests
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
+from google_auth_oauthlib.flow import Flow
+
+# The scopes we need: an email address to key the account on, and the subject
+# id that identifies this Google account for good.
+SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+]
+
+# The redirect URI is registered once in the Cloud Console and has to match
+# character for character, so it is built from one place only.
+ACCESS_TYPE = "offline"
+AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
+TOKEN_URI = "https://oauth2.googleapis.com/token"
+REVOKE_URI = "https://oauth2.googleapis.com/revoke"
+
+# How long an unused state token stays valid.
 STATE_TTL_SECONDS = 600
 
-AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
-USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
-SCOPE = "openid email profile"
-
+# In-memory only. A restart drops these, which just means an in-flight
+# sign-in has to be restarted, so nothing is written to disk.
 _STATES = {}
 
 
 class GoogleAuthError(Exception):
-    """Anything that stops a Google sign-in. Message is shown to the user."""
-
-
-def configured():
-    return bool(client_id() and client_secret())
+    """Anything that stops a Google sign-in. The message is shown to the
+    customer, so it should read like an explanation, not a stack trace."""
 
 
 def client_id():
@@ -50,145 +52,165 @@ def client_secret():
     return os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
 
 
+def configured():
+    """True when both halves of the OAuth client are present."""
+    return bool(client_id() and client_secret())
+
+
 def base_url():
-    configured_url = os.environ.get("CALLDESK_BASE_URL", "").strip()
-    return configured_url.rstrip("/")
+    """The public origin of this CallDesk instance, no trailing slash."""
+    return os.environ.get("CALLDESK_BASE_URL", "").strip().rstrip("/")
 
 
-def redirect_uri(request_host=""):
-    """Where Google sends the customer back. Must match the OAuth client
-    exactly, registered character for character in the Cloud Console."""
+def redirect_uri():
+    """Where Google sends the customer back. Must be registered in the Cloud
+    Console exactly as written here."""
     base = base_url()
-    if not base and request_host:
-        scheme = "https" if os.environ.get("FORCE_HTTPS") else "http"
-        base = f"{scheme}://{request_host}"
     if not base:
         raise GoogleAuthError(
-            "CALLDESK_BASE_URL is not set, so the Google redirect URI is unknown.")
+            "CALLDESK_BASE_URL is not set, so the Google redirect URI cannot be "
+            "built. Set it to this instance's public address.")
     return f"{base}/auth/google/callback"
 
 
+def _client_config():
+    return {
+        "web": {
+            "client_id": client_id(),
+            "client_secret": client_secret(),
+            "auth_uri": AUTH_URI,
+            "token_uri": TOKEN_URI,
+            "auth_provider_x509_cert_url": (
+                "https://www.googleapis.com/oauth2/v1/certs"
+            ),
+            "userinfo_host": "https://www.googleapis.com",
+            "revoke_uri": REVOKE_URI,
+        }
+    }
+
+
 def get_google_auth_url(state, request_host=""):
-    """The consent-screen URL. `state` is single-use and expires."""
+    """The consent-screen URL for `state`.
+
+    `state` is ours, not Google's: the value is carried through the round trip
+    and checked on the way back, which is what stops someone else's
+    authorization being attached to our session.
+    """
     if not configured():
         raise GoogleAuthError(
             "Google sign-in is not configured. Set GOOGLE_CLIENT_ID and "
-            "GOOGLE_CLIENT_SECRET in .env.")
-    token = secrets.token_urlsafe(24)
-    _STATES[token] = {"state": state, "expires": _now() + STATE_TTL_SECONDS}
-    params = {
-        "client_id": client_id(),
-        "redirect_uri": redirect_uri(request_host),
-        "response_type": "code",
-        "scope": SCOPE,
-        # Forces the consent screen every time, so a returning customer always
-        # lands back on the account we expect.
-        "prompt": "select_account",
-        "access_type": "offline",
-        "state": token,
-    }
-    return f"{AUTH_URL}?{urllib.parse.urlencode(params)}"
+            "GOOGLE_CLIENT_SECRET in .env to enable it.")
+
+    flow = Flow.from_client_config(_client_config(), scopes=SCOPES,
+                                   redirect_uri=redirect_uri())
+    auth_url, state_token = flow.authorization_url(
+        access_type=ACCESS_TYPE,
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    _STATES[state_token] = {"state": state, "issued": time.time()}
+    _expire_states()
+    return auth_url
 
 
-def consume_state(token):
-    """Check and burn a state token. One time use, and it expires."""
-    entry = _STATES.pop(token, None) if token else None
+def consume_state(state_token):
+    """Check a state token and throw it away.
+
+    Single use, and only valid for STATE_TTL_SECONDS. Returning the stored
+    value is what tells the caller who was signing in.
+    """
+    entry = _STATES.pop(state_token, None) if state_token else None
     if not entry:
-        raise GoogleAuthError("That sign-in link has expired. Please try again.")
-    if entry["expires"] < _now():
-        raise GoogleAuthError("That sign-in link has expired. Please try again.")
+        raise GoogleAuthError(
+            "That Google sign-in link is no longer valid. Please try again.")
+    if time.time() - entry["issued"] > STATE_TTL_SECONDS:
+        raise GoogleAuthError(
+            "That Google sign-in link has expired. Please try again.")
     return entry["state"]
 
 
-def _now():
-    import time
-
-    return time.time()
-
-
-def _post(url, form):
-    data = urllib.parse.urlencode(form).encode()
-    request = urllib.request.Request(
-        url, data=data, method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as err:
-        try:
-            detail = json.loads(err.read().decode())
-            message = detail.get("error_description") or detail.get("error") or ""
-        except (ValueError, OSError):
-            message = ""
-        raise GoogleAuthError(
-            f"Google rejected the sign-in ({err.code}){': ' + message if message else ''}"
-        ) from None
-    except (urllib.error.URLError, OSError) as err:
-        raise GoogleAuthError(f"Could not reach Google: {err}") from None
+def _expire_states():
+    """Keep _STATES from growing without bound on a long-running process."""
+    cutoff = time.time() - STATE_TTL_SECONDS
+    for token in [t for t, e in _STATES.items() if e["issued"] < cutoff]:
+        _STATES.pop(token, None)
 
 
-def _get(url, token):
-    request = urllib.request.Request(
-        url, headers={"Authorization": f"Bearer {token}"}
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as err:
-        raise GoogleAuthError(
-            "Google did not confirm that sign-in. Please try again.") from None
-    except (urllib.error.URLError, OSError) as err:
-        raise GoogleAuthError(f"Could not reach Google: {err}") from None
-
-
-def exchange_code_for_user(code, request_host=""):
-    """Trade the authorization code for a profile.
-
-    Returns {email, google_id, name}. Raises GoogleAuthError with a message
-    meant for the login page.
-    """
+def _fetch_tokens(code):
+    """Swap the authorization code for tokens. Google must be given the same
+    redirect_uri it was, or it rejects the exchange."""
     if not code:
-        raise GoogleAuthError("Google did not send an authorization code.")
+        raise GoogleAuthError(
+            "Google did not send an authorization code. Please try again.")
     if not configured():
         raise GoogleAuthError(
             "Google sign-in is not configured. Set GOOGLE_CLIENT_ID and "
-            "GOOGLE_CLIENT_SECRET in .env.")
+            "GOOGLE_CLIENT_SECRET in .env to enable it.")
 
-    tokens = _post(TOKEN_URL, {
-        "code": code,
-        "client_id": client_id(),
-        "client_secret": client_secret(),
-        "redirect_uri": redirect_uri(request_host),
-        "grant_type": "authorization_code",
-    })
-    access_token = tokens.get("access_token")
-    if not access_token:
-        raise GoogleAuthError("Google did not return an access token.")
+    flow = Flow.from_client_config(_client_config(), scopes=SCOPES,
+                                   state=uuid.uuid4().hex,
+                                   redirect_uri=redirect_uri())
+    try:
+        flow.fetch_token(code=code)
+    except Exception as err:  # google-auth raises a wide range of errors
+        raise GoogleAuthError(
+            f"Google would not complete the sign-in ({err}). Please try again."
+        ) from None
+    return flow.credentials
 
-    profile = _get(USERINFO_URL, access_token)
-    email = (profile.get("email") or "").strip().lower()
-    google_id = (profile.get("sub") or "").strip()
+
+def exchange_code_for_user(code, request_host=""):
+    """Trade the authorization code for a verified profile.
+
+    Returns {email, google_id, name}. `google_id` is Google's stable subject id
+    for that account, which is what we key the link on, because an email
+    address can change.
+    """
+    credentials = _fetch_tokens(code)
+    if not credentials.id_token:
+        raise GoogleAuthError(
+            "Google did not return an ID token, so the sign-in could not be "
+            "verified. Check that the openid scope is allowed.")
+
+    # This is the check that makes the rest trustworthy: it verifies the ID
+    # token's signature against Google's public keys, its audience against our
+    # client id, and that it has not expired.
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            credentials.id_token, google_requests.Request(),
+            client_id(),
+        )
+    except ValueError as err:
+        raise GoogleAuthError(
+            f"Google's sign-in could not be verified ({err}). Please try again."
+        ) from None
+
+    email = (claims.get("email") or "").strip().lower()
+    google_id = (claims.get("sub") or "").strip()
     if not email:
         raise GoogleAuthError(
-            "That Google account has no email address, so it cannot be used "
-            "to sign in. Add one in Google and try again.")
+            "That Google account has no email address, so it cannot be used to "
+            "sign in. Add one in Google and try again.")
     if not google_id:
-        raise GoogleAuthError("Google did not return an account id.")
-    if profile.get("email_verified") is False:
-        raise GoogleAuthError("That Google account's email is not verified.")
+        raise GoogleAuthError(
+            "Google did not return an account id, so the sign-in cannot be "
+            "matched to an account. Please try again.")
+    if claims.get("email_verified") is False:
+        raise GoogleAuthError(
+            "That Google account's email address is not verified, so it cannot "
+            "be used to sign in. Verify it in Google and try again.")
 
-    return {
-        "email": email,
-        "google_id": google_id,
-        "name": (profile.get("name") or "").strip(),
-    }
+    return {"email": email, "google_id": google_id,
+            "name": (claims.get("name") or "").strip()}
 
 
 def find_or_create_google_user(email, google_id, business_name=""):
     """Sign a Google identity in, creating or linking the local account.
 
-    Lives here so the caller has one import, but the rows live in db.py.
+    If the email already has an account, the Google identity is linked to it
+    rather than making a second one, so signing up twice does not orphan call
+    history. A new Google-only account gets an empty password_hash, which
+    means it can never be signed into with a password.
     """
     import db
 

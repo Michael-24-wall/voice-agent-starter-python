@@ -1,0 +1,94 @@
+// Clinic scheduling: the inbound call assistant for a hospital or clinic.
+//
+// This file is the request body for POST /v1/agents. There is no wrapper and no
+// field the API does not define. The base agent is published once with
+// agent_manager.publish_user_agent(), which fills in {business_name} and the
+// tool URLs, so each clinic gets its own agent rather than sharing one.
+//
+// https://www.assemblyai.com/docs/voice-agents/voice-agent-api/create-agent
+{
+  // {business_name} is replaced with the account's own name at publish time.
+  "name": "{business_name} Scheduling",
+
+  // Read aloud, so short spoken sentences, no lists, no formatting.
+  // The last two lines matter: slot times and doctor names only come from a
+  // tool, and a failed tool means the caller is told so, not guessed around.
+  // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/prompting-guide
+  "system_prompt": "You are the scheduling assistant for {business_name}, a hospital. Help callers find available appointment slots and book them. Collect the patient name, phone number, department, and preferred date. Call check_slots before offering a time, then book_appointment to confirm. If a tool returns ok false, say what went wrong in plain words, for example that the slot was just taken or that the department does not exist. Never name a doctor or a time you did not get from a tool, and never give medical advice. Keep responses under 2 sentences. Do not make up information you were not given.",
+
+  // Without a greeting the agent says nothing when the call connects, and
+  // silence on a fresh line reads as a dropped call.
+  // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/greeting
+  "greeting": "Thanks for calling {business_name}. Would you like to book an appointment?",
+
+  // Voice catalog: https://www.assemblyai.com/docs/voice-agents/voice-agent-api/voices
+  // jane is US English. Immutable once a session starts, so it only affects
+  // calls that begin after the change.
+  "voice": { "voice_id": "jane" },
+
+  "tools": [
+    {
+      // Read by the model to decide when to call it, so it says when to use
+      // the tool, not just what the tool does.
+      "name": "check_slots",
+      "description": "List open appointment slots in one department on one date. Use before telling a caller a time is free.",
+
+      // interactive keeps the agent talking while the query runs, so a slow
+      // or failing tool never reads as a dropped line. hold would silence the
+      // agent until a result came back.
+      // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/overview#execution-modes
+      "execution_mode": "interactive",
+      "timeout_seconds": 30,
+
+      "parameters": {
+        "type": "object",
+        "properties": {
+          // The department is matched against what the clinic actually
+          // registered in setup, so a wrong name comes back as an error the
+          // agent can read out instead of an empty list.
+          "department": { "type": "string" },
+          "date": { "type": "string", "description": "Appointment date as YYYY-MM-DD" }
+        },
+        "required": ["department", "date"]
+      },
+
+      // AssemblyAI makes this request, not the browser, so the tool also works
+      // on a phone call. The URL must be a public https address: the API
+      // rejects http:// outright, and 127.0.0.1 or localhost resolve on
+      // AssemblyAI's own servers rather than on this machine.
+      // ${CALLDESK_TOOL_BASE} is the /tool prefix, in .env so the tunnel
+      // hostname can change without editing here. agent_manager falls back to
+      // deriving it from CALLDESK_TOOL_URL.
+      // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/http-tools
+      "http": {
+        "url": "${CALLDESK_TOOL_BASE}/check_slots",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "book_appointment",
+      "description": "Book one specific appointment slot. Only call after check_slots confirmed that time is open.",
+
+      "execution_mode": "interactive",
+      "timeout_seconds": 30,
+
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "department": { "type": "string" },
+          "doctor_name": { "type": "string" },
+          "patient_name": { "type": "string" },
+          "patient_phone": { "type": "string" },
+          "slot_datetime": { "type": "string", "description": "The slot time from check_slots" },
+          "reason": { "type": "string" }
+        },
+        "required": ["department", "patient_name", "patient_phone", "slot_datetime"]
+      },
+
+      "http": {
+        "url": "${CALLDESK_TOOL_BASE}/book_appointment",
+        "http_method": "POST"
+      }
+    }
+  ]
+}

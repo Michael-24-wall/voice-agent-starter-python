@@ -1,6 +1,21 @@
-<h1>Calls</h1>
-<p class="sub">{{CALL_COUNT}} logged for {{BUSINESS_NAME}}.</p>
-{{ERROR}}
-<div class="panel">
-  {{CALLS}}
+<div class="page-head">
+  <div>
+    <h1>Call history</h1>
+    <p class="sub">{{CALL_COUNT}} logged for {{BUSINESS_NAME}}.</p>
+  </div>
+  <div class="filter-row" role="group" aria-label="Filter calls by date">
+    <a class="btn {{FILTER_ALL}} btn-sm" href="/calls">All</a>
+    <a class="btn {{FILTER_TODAY}} btn-sm" href="/calls?range=today">Today</a>
+    <a class="btn {{FILTER_WEEK}} btn-sm" href="/calls?range=week">This week</a>
+  </div>
 </div>
+
+{{ERROR}}
+
+<div class="card" style="padding:0">
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{CALLS}}
+  </div>
+</div>
+
+{{PAGER}}

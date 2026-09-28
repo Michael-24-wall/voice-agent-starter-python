@@ -1,1 +1,12 @@
-# Standard library only. Nothing to install.
+# CallDesk runtime dependencies. The starter was standard library only; CallDesk
+# adds Google OAuth and the Twilio SDK.
+#
+#   pip install -r requirements.txt
+#
+# Everything else in the project, including the database layer, the HTTP server
+# and the templating, is still standard library.
+
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+requests>=2.31.0
+twilio>=9.0.0

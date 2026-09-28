@@ -1,40 +1,45 @@
-<div class="auth">
-  <h1>Create your account</h1>
-  <p class="sub">Set up your business in under a minute.</p>
-  {{ERROR}}
+<div class="auth-wrap">
+  <div class="card">
+    <div class="auth-head">
+      <h1>Create your account</h1>
+      <p class="muted">Start taking calls with your own AI receptionist.</p>
+    </div>
 
-  <a class="btn google" href="/auth/google">{{GOOGLE_MARK}}Continue with Google</a>
-  {{GOOGLE_HINT}}
+    {{ERROR}}
 
-  <div class="or"><span>or with email</span></div>
+    <form method="post" action="/signup" class="stack">
+      <div class="form-field">
+        <label for="business_name">Business name</label>
+        <input type="text" id="business_name" name="business_name" value="{{BUSINESS_NAME}}"
+               autocomplete="organization" required autofocus>
+      </div>
+      <div class="form-field">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" value="{{EMAIL}}"
+               autocomplete="email" required>
+      </div>
+      <div class="form-field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password"
+               autocomplete="new-password" minlength="8" required>
+        <span class="form-hint">At least 8 characters.</span>
+      </div>
+      <div class="form-field">
+        <label for="mobile_number">Mobile number <span class="muted">(optional)</span></label>
+        <input type="tel" id="mobile_number" name="mobile_number" value="{{MOBILE_NUMBER}}"
+               autocomplete="tel" placeholder="+15558889999">
+        <span class="form-hint">Used if you turn on ring-my-mobile-first answering.</span>
+      </div>
+      <button class="btn btn-primary btn-block btn-lg" type="submit">Create account</button>
+    </form>
 
-  <form method="post" action="/signup" class="panel">
-    <div class="field">
-      <label for="business_name">Business name</label>
-      <input type="text" id="business_name" name="business_name" required
-             placeholder="Acme Plumbing" value="{{BUSINESS_NAME}}">
-    </div>
-    <div class="field">
-      <label for="email">Work email</label>
-      <input type="email" id="email" name="email" required
-             placeholder="you@yourcompany.com" value="{{EMAIL}}">
-    </div>
-    <div class="field">
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password" required
-             placeholder="At least 8 characters" minlength="8">
-    </div>
-    <div class="field">
-      <label for="mobile_number">Mobile number</label>
-      <input type="tel" id="mobile_number" name="mobile_number"
-             placeholder="+15551234567" value="{{MOBILE_NUMBER}}">
-      <p class="hint">
-        Used by Answering Mode B to ring your phone first. You can add it later.
-      </p>
-    </div>
-    <button class="btn primary" type="submit">Create account</button>
-    <p class="muted" style="margin-top:16px;font-size:14px">
-      Already have one? <a href="/login">Log in</a>
-    </p>
-  </form>
+    <div class="divider" style="margin:20px 0">or</div>
+
+    <a class="btn btn-secondary btn-block google-btn" href="/auth/google">
+      {{GOOGLE_MARK}}Sign in with Google
+    </a>
+    {{GOOGLE_HINT}}
+
+    <p class="auth-foot">Already have an account? <a href="/login">Sign in</a></p>
+  </div>
 </div>

@@ -3,174 +3,230 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{AGENT_NAME}}</title>
-<style>
-  /* Tokens taken from assemblyai.com. The three typefaces are licensed and
-     not bundled here, so each falls back the same way the site's own stack
-     does: Georgia for display, system-ui for body, JetBrains Mono for mono. */
-  :root {
-    --page-bg: #fdfcf8;
-    --surface: #fff;
-    --surface-alt: #f5f3eb;
-    --border: #dad7cb;
-    --border-strong: #c7c3b2;
-    --text: #4a4945;
-    --text-dark: #1d1b16;
-    --text-muted: #777673;
-    --text-faint: #a5a4a2;
-    --cobolt-500: #3923c7;
-    --cobolt-300: #887bdd;
-    --cobolt-100: #d7d3f4;
-    --green-500: #01762f;
-    --error: #f04438;
-    --radius-sm: 4px;
-    --radius-lg: 12px;
-    --font-display: "Oceanic Text", Georgia, serif;
-    --font-body: "UN 11ST", system-ui, -apple-system, sans-serif;
-    --font-mono: "Modern Gothic Mono", "JetBrains Mono", ui-monospace, monospace;
-  }
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
-  body {
-    font-family: var(--font-body); font-size: 16px; line-height: 1.3;
-    color: var(--text); background: var(--page-bg); display: flex;
-    flex-direction: column; align-items: center; padding: 24px 20px 20px;
-  }
-  main { width: 100%; max-width: 1088px; flex: 1; display: flex;
-         flex-direction: column; min-height: 0; gap: 16px; }
-
-  /* .eyebrow on the site: mono, 12px, uppercase, 1.2px tracking. */
-  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 1.2px;
-             text-transform: uppercase; font-feature-settings: "ss09" 1; }
-
-  header { display: flex; align-items: center; gap: 16px;
-           padding-bottom: 16px; border-bottom: 1px solid var(--border); }
-  h1 { font-family: var(--font-display); font-size: 24px; font-weight: 400;
-       letter-spacing: -1.2px; line-height: 1; color: var(--text-dark);
-       margin-right: auto; }
-  .status { display: flex; align-items: center; gap: 8px; color: var(--text-muted); }
-  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%;
-                    background: currentColor; flex-shrink: 0; }
-  .status.listening { color: var(--green-500); }
-  .status.speaking { color: var(--cobolt-500); }
-  .status.error { color: var(--error); text-transform: none; letter-spacing: 0;
-                  font-family: var(--font-body); font-size: 14px; }
-  .status.listening::before, .status.speaking::before {
-    animation: pulse 1.6s ease-in-out infinite; }
-  @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
-  .meter { display: flex; gap: 10px; font-family: var(--font-mono); font-size: 12px;
-           color: var(--text-faint); }
-  #elapsed { min-width: 34px; text-align: right; }
-  #cost { min-width: 48px; text-align: right; }
-
-  .panes { flex: 1; min-height: 0; display: grid; gap: 16px;
-           grid-template-columns: 1fr 360px; }
-  body.no-side .panes { grid-template-columns: 1fr; }
-  body.no-side #side { display: none; }
-  [hidden] { display: none !important; }
-  @media (max-width: 880px) {
-    .panes { grid-template-columns: 1fr; grid-template-rows: 1fr 176px; }
-    body.no-side .panes { grid-template-rows: 1fr; }
-  }
-
-  .pane { display: flex; flex-direction: column; min-height: 0;
-          background: var(--surface); border: 1px solid var(--border);
-          border-radius: var(--radius-lg); overflow: hidden; }
-  .pane-head { display: flex; align-items: center; justify-content: space-between;
-               gap: 16px; padding: 10px 16px; background: var(--surface-alt);
-               border-bottom: 1px solid var(--border); color: var(--text-muted); }
-  .pane-body { flex: 1; overflow-y: auto; padding: 16px; }
-  .empty { color: var(--text-faint); font-size: 14px; line-height: 1.4; }
-
-  #transcript { display: flex; flex-direction: column; gap: 12px; }
-  .line { display: flex; gap: 12px; font-size: 16px; line-height: 1.4; }
-  .who { color: var(--text-faint); padding-top: 3px; flex-shrink: 0; width: 88px;
-         overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .line.agent .said { color: var(--text-dark); }
-  .line.partial .said { color: var(--text-muted); }
-  .line.tool { font-family: var(--font-mono); font-size: 13px;
-               color: var(--cobolt-500); }
-  .line.tool .said { word-break: break-all; }
-
-  #events-body { font-family: var(--font-mono); font-size: 12px; line-height: 1.8; }
-  .event { display: flex; gap: 8px; align-items: baseline; white-space: nowrap; }
-  .event .at { color: var(--text-faint); min-width: 44px; text-align: right;
-               flex-shrink: 0; }
-  .event .dir, .event .count { color: var(--text-faint); flex-shrink: 0; }
-  .event .count:empty, .event .detail:empty { display: none; }
-  .event .type { flex-shrink: 0; color: var(--text-dark); }
-  .event.up .type { color: var(--text-muted); }
-  .event .detail { color: var(--text-faint); overflow: hidden; white-space: nowrap;
-                   text-overflow: ellipsis; }
-
-  .pane-foot { display: flex; gap: 8px; align-items: center; padding: 12px 16px;
-               background: var(--surface-alt); border-top: 1px solid var(--border); }
-  /* .cta-primary on the site: cobolt fill, mono uppercase 14px, 1.4px
-     tracking, 40px tall, 4px radius, lightening on hover. */
-  button { height: 40px; padding: 0 24px; margin-left: auto; border: none;
-           border-radius: var(--radius-sm); background: var(--cobolt-500);
-           color: #fff; font-family: var(--font-mono); font-size: 14px;
-           letter-spacing: 1.4px; text-transform: uppercase; white-space: nowrap;
-           cursor: pointer; transition: background-color .2s; }
-  button:hover:not(:disabled) { background: var(--cobolt-300); }
-  button:disabled { opacity: .55; cursor: default; }
-  button.live { background: var(--error); }
-  button.live:hover { background: #f4695f; }
-  select { flex: 0 1 220px; min-width: 0; height: 40px; padding: 0 8px;
-           font-family: var(--font-body); font-size: 13px; color: var(--text-muted);
-           background: var(--surface); border: 1px solid var(--border);
-           border-radius: var(--radius-sm); }
-  select:disabled { color: var(--text-faint); }
-  /* Text button, sized to sit inside the pane header. */
-  .ghost { height: auto; margin-left: 0; padding: 0; background: transparent;
-           color: var(--text-faint); font-size: 12px; letter-spacing: 1.2px; }
-  .ghost:hover:not(:disabled) { background: transparent; color: var(--cobolt-500); }
-  .tabs { display: flex; gap: 16px; }
-  .tab.on { color: var(--text-dark); }
-
-  /* Read-only view of the agent as the API stored it. */
-  #agent-body pre { font-family: var(--font-mono); font-size: 12px;
-                    line-height: 1.6; color: var(--text); white-space: pre-wrap;
-                    word-break: break-word; }
-</style>
+<meta name="color-scheme" content="dark">
+<title>Talk to {{AGENT_NAME}} &middot; CallDesk</title>
+<link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-<main>
-  <header>
-    <h1>{{AGENT_NAME}}</h1>
-    <span class="status idle" id="status"><span id="status-text">idle</span></span>
-    <span class="meter"><span id="elapsed">0:00</span><span id="cost">$0.000</span></span>
-  </header>
+<body class="voice">
+<header class="app-header">
+  <div class="bar">
+    <a href="/" class="logo" aria-label="CallDesk home">
+      <span class="logo-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 13h3l2.5-8 3 16 3-12 2 6h4.5"/>
+        </svg>
+      </span>
+      <span class="logo-word">CallDesk</span>
+    </a>
+    <nav class="nav-links" id="primary-nav">
+      <a href="/dashboard">Dashboard</a>
+      <a href="/numbers">Numbers</a>
+      <a href="/calls">Calls</a>
+      <a href="/settings/answering">Settings</a>
+    </nav>
+    <div class="header-right">
+      <span class="badge badge-neutral badge-plain">Live agent</span>
+      <a class="btn btn-ghost btn-sm" href="/dashboard">Dashboard</a>
+    </div>
+  </div>
+</header>
 
-  <div class="panes">
-    <section class="pane">
-      <div class="pane-head"><span>Transcript</span></div>
-      <div class="pane-body" id="transcript">
-        <div class="empty">Start the call and talk. Partial transcripts appear as they stream, and tool calls show up inline.</div>
+<main class="voice-shell">
+  <div class="voice-grid">
+
+    <!-- Left: the call itself. app.js drives #btn, #status, #elapsed, #cost. -->
+    <section class="card call-panel" id="call-panel">
+      <div class="card-title">Talk to {{AGENT_NAME}}</div>
+
+      <button class="call-btn" id="call-btn" type="button" aria-label="Start call">
+        <svg class="icon-start" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/>
+        </svg>
+        <svg class="icon-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="6" y="6" width="12" height="12" rx="2"/>
+        </svg>
+      </button>
+
+      <div class="call-status status idle" id="status" role="status">
+        <span id="status-text">idle</span>
       </div>
-      <div class="pane-foot">
+
+      <div class="call-timer" id="elapsed" aria-label="Call duration">0:00</div>
+      <div class="call-cost" id="cost" aria-label="Estimated cost">$0.000</div>
+
+      <canvas class="meter-canvas" id="meter" aria-hidden="true"></canvas>
+      <div class="meter-hint">Audio level from your microphone</div>
+
+      <div class="call-actions">
+        <button class="btn btn-primary btn-block btn-lg" id="btn" type="button">Start call</button>
+      </div>
+
+      <div class="mic-row">
+        <label class="form-label" for="mic" style="flex:0 0 auto">Mic</label>
         <select id="mic" aria-label="Microphone"><option value="">Default microphone</option></select>
-        <button id="btn">Start call</button>
       </div>
     </section>
-    <section class="pane" id="side">
+
+    <!-- Right: transcript and the raw frames. app.js needs #tab-events,
+         #tab-agent, #events-body and #agent-body, so the Agent view stays. -->
+    <section class="card pane" id="side">
       <div class="pane-head">
         <span class="tabs">
-          <button class="ghost tab on" id="tab-events">Events</button>
-          <button class="ghost tab" id="tab-agent">Agent</button>
+          <button class="tab on" id="tab-transcript" type="button">Transcript</button>
+          <button class="tab" id="tab-events" type="button">Events</button>
+          <button class="tab" id="tab-agent" type="button">Agent</button>
         </span>
-        <button class="ghost" id="log-toggle">Hide</button>
+        <button class="ghost" id="log-toggle" type="button">Hide</button>
       </div>
-      <div class="pane-body" id="events-body">
+
+      <div class="pane-body" id="transcript-body">
+        <div id="transcript">
+          <div class="empty">Start the call and talk. Partial transcripts appear as they stream, and tool calls show up inline.</div>
+        </div>
+      </div>
+
+      <div class="pane-body" id="events-body" hidden>
         <div class="empty">Every websocket frame, both directions. Repeats collapse into a count.</div>
       </div>
+
       <div class="pane-body" id="agent-body" hidden>
         <div class="empty">Loading the published agent.</div>
       </div>
     </section>
+
   </div>
 </main>
+
+<div class="toast-stack" id="toasts" aria-live="polite"></div>
+
 <script>window.AGENT = {{AGENT_JSON}}</script>
 <script src="/app.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  // --- tabs --------------------------------------------------------------
+  // app.js owns showTab() for events/agent. Wrap it so a transcript tab can
+  // live beside them without editing app.js.
+  var transcriptTab = document.getElementById("tab-transcript");
+  var transcriptBody = document.getElementById("transcript-body");
+  var eventsTab = document.getElementById("tab-events");
+  var eventsBody = document.getElementById("events-body");
+  var agentTab = document.getElementById("tab-agent");
+  var agentBody = document.getElementById("agent-body");
+  var inner = window.showTab;
+
+  function pick(name) {
+    if (name === "transcript") {
+      transcriptTab.classList.add("on");
+      transcriptBody.hidden = false;
+      eventsTab.classList.remove("on");
+      eventsBody.hidden = true;
+      agentTab.classList.remove("on");
+      agentBody.hidden = true;
+      return;
+    }
+    transcriptTab.classList.remove("on");
+    transcriptBody.hidden = true;
+    if (typeof inner === "function") { inner(name); }
+  }
+
+  if (typeof inner === "function") {
+    window.showTab = function (name) { pick(name); };
+  }
+  transcriptTab.addEventListener("click", function () { pick("transcript"); });
+  eventsTab.addEventListener("click", function () { pick("events"); });
+  agentTab.addEventListener("click", function () { pick("agent"); });
+  pick("transcript");
+
+  // --- the round call button drives the one app.js listens to -----------
+  var panel = document.getElementById("call-panel");
+  var round = document.getElementById("call-btn");
+  var main = document.getElementById("btn");
+  var status = document.getElementById("status");
+
+  function sync() {
+    var live = main.classList.contains("live");
+    panel.classList.toggle("live", live);
+    round.setAttribute("aria-label", live ? "End call" : "Start call");
+    var kind = (status.className.match(/status\s+([a-z]+)/) || [])[1] || "idle";
+    round.style.setProperty("--ring", kind);
+    panel.dataset.state = kind;
+  }
+
+  round.addEventListener("click", function () { main.click(); });
+  new MutationObserver(sync).observe(main, { attributes: true, attributeFilter: ["class"] });
+  new MutationObserver(sync).observe(status, { attributes: true, attributeFilter: ["class"] });
+  sync();
+
+  // --- audio meter -------------------------------------------------------
+  // app.js leaves the capture stream on window.mic, so the meter rides the
+  // same audio instead of asking for the microphone a second time.
+  var canvas = document.getElementById("meter");
+  var ctx2d = canvas.getContext("2d");
+  var analyser = null;
+  var data = null;
+
+  function attach() {
+    if (analyser || !window.mic || !window.captureCtx) { return false; }
+    analyser = window.captureCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    window.captureCtx.createMediaStreamSource(window.mic).connect(analyser);
+    data = new Uint8Array(analyser.frequencyBinCount);
+    return true;
+  }
+
+  function size() {
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.clientWidth;
+    var h = canvas.clientHeight;
+    if (!w || !h) { return; }
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function draw() {
+    var w = canvas.clientWidth;
+    var h = canvas.clientHeight;
+    if (!w || !h) { canvas.width = 0; return; }
+    if (canvas.width !== w * (window.devicePixelRatio || 1)) { size(); }
+
+    ctx2d.clearRect(0, 0, w, h);
+
+    var bars = 40;
+    var gap = 2;
+    var width = (w - gap * (bars - 1)) / bars;
+
+    if (!analyser) { attach(); }
+    if (analyser && data) {
+      analyser.getByteFrequencyData(data);
+    }
+
+    for (var i = 0; i < bars; i++) {
+      var value = 0;
+      if (analyser && data) {
+        var from = Math.floor(Math.pow(i / bars, 1.6) * data.length * 0.75);
+        var to = Math.max(from + 1, Math.floor(Math.pow((i + 1) / bars, 1.6) * data.length * 0.75));
+        var peak = 0;
+        for (var j = from; j < to; j++) { if (data[j] > peak) { peak = data[j]; } }
+        value = peak / 255;
+      }
+      var bar = Math.max(2, value * (h - 4));
+      var x = i * (width + gap);
+      var y = (h - bar) / 2;
+      ctx2d.fillStyle = value > 0.02
+        ? "rgba(94, 234, 212, " + (0.35 + value * 0.65) + ")"
+        : "rgba(138, 148, 171, 0.22)";
+      ctx2d.fillRect(x, y, width, bar);
+    }
+    requestAnimationFrame(draw);
+  }
+
+  window.addEventListener("resize", size);
+  size();
+  draw();
+})();
+</script>
 </body>
 </html>

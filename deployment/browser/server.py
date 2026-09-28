@@ -36,11 +36,14 @@ from lib import (ApiError, aai, load_env, publish_agent, read_agent,  # noqa: E4
                  required, stored_agent_id)
 
 TEMPLATES = ROOT / "templates"
+STATIC = HERE / "static"
 
 
 def resolve_agent() -> dict:
     """A published id means the agent is managed elsewhere, so use it as it is."""
-    name = os.environ.get("AGENT", "minimal")
+    # CallDesk is the product, so it is the default. The starter's minimal agent
+    # is still one env var away: AGENT=minimal python deployment/browser/server.py
+    name = os.environ.get("AGENT", "calldesk")
     known = stored_agent_id(name)
     if known:
         try:
@@ -85,7 +88,16 @@ _SLOT = re.compile(r"\{\{([A-Z_]+)\}\}")
 
 # Slots holding HTML built in this file; every other slot gets escaped.
 RAW = {"CONTENT", "NAV", "NUMBERS", "AVAILABLE", "RECENT_CALLS", "CALLS",
-       "TWILIO_BANNER", "ERROR"}
+       "TWILIO_BANNER", "ERROR", "PAGER"}
+
+# A one-shot message for the toast on the next page. base.html reads the cookie,
+# shows it, and clears it, so it never survives to a second page.
+FLASH_COOKIE = "calldesk_flash"
+
+
+def flash_cookie(message: str, kind: str = "ok") -> str:
+    """A Set-Cookie value that carries a flash message across a redirect."""
+    return f"{FLASH_COOKIE}={urllib.parse.quote(f'{kind}|{message}', safe='')}; Path=/; Max-Age=30; SameSite=Lax"
 
 
 def fill(source: str, **values) -> str:
@@ -114,29 +126,12 @@ def page(name: str, title: str, nav: str, **values) -> bytes:
 # --- view fragments ------------------------------------------------------
 
 URGENCIES = ("high", "medium", "low")
-CONNECT_NOT_CONFIGURED = "Twilio Connect not configured. Set TWILIO_CONNECT_APP_SID in .env."
-
-
-def urgency_class(value) -> str:
-    v = (value or "").strip().lower()
-    return v if v in URGENCIES else "medium"
-
-
-def nav_for(user) -> str:
-    if user:
-        return (
-            '<nav>'
-            '<a href="/dashboard">Dashboard</a>'
-            '<a href="/numbers">Numbers</a>'
-            '<a href="/calls">Calls</a>'
-            '<a href="/talk" target="_blank" rel="noopener">Talk</a>'
-            f'<span class="muted" style="font-size:13px">{esc(user["business_name"])}</span>'
-            '<form method="post" action="/logout">'
-            '<button class="btn sm" type="submit">Log out</button>'
-            "</form>"
-            "</nav>"
-        )
-    return '<nav><a href="/login">Log in</a><a href="/signup">Sign up</a></nav>'
+CONNECT_NOT_CONFIGURED = (
+    "Twilio Connect not configured. To enable phone integration, an admin "
+    "must create a Twilio Connect App (requires an upgraded Twilio account) "
+    "and set TWILIO_CONNECT_APP_SID in .env. The code for the full Connect "
+    "flow is already implemented and ready to activate."
+)
 
 
 GOOGLE_MARK = (
@@ -154,8 +149,8 @@ GOOGLE_MARK = (
 
 
 def google_hint():
-    """Shown under the Google button when the OAuth client is not set up, so
-    the button never leads to a dead end."""
+    """Shown under the Google button when the OAuth client is not configured,
+    so the button never leads to a dead end."""
     if google_auth.configured():
         return ""
     return note(
@@ -163,49 +158,192 @@ def google_hint():
         "GOOGLE_CLIENT_SECRET to .env to enable it.", "warn")
 
 
-def google_login_page(message="", status=400):
+def google_login_page(message=""):
     """The login page, carrying a Google failure back to the customer."""
     return page("login.html", "Log in", nav_for(None),
                 ERROR=error_box(message) if message else "",
-                GOOGLE_HINT=google_hint())
+                GOOGLE_MARK=GOOGLE_MARK, GOOGLE_HINT=google_hint())
 
+
+def urgency_class(value) -> str:
+    v = (value or "").strip().lower()
+    return v if v in URGENCIES else "medium"
+
+
+def utc_day(days_ago: int = 0) -> str:
+    """A 'YYYY-MM-DD' day string in UTC, matching CURRENT_TIMESTAMP.
+
+    calls.created_at is a SQLite CURRENT_TIMESTAMP, so it is UTC and sorts and
+    compares correctly as plain text. `days_ago` counts backwards; the name is
+    deliberate, because adding would silently produce a future cutoff and an
+    empty result rather than an error.
+    """
+    import datetime
+    return (datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(days=days_ago)).strftime("%Y-%m-%d")
+
+
+def pager(page_no: int, pages: int, total: int, span: str) -> str:
+    """Previous/next controls, only once there is more than one page."""
+    if pages < 2:
+        return ""
+    base = "/calls" + (f"?range={span}" if span else "")
+
+    def link(target, label, enabled):
+        if not enabled:
+            return f'<span class="btn btn-secondary btn-sm" aria-disabled="true">{label}</span>'
+        return (f'<a class="btn btn-secondary btn-sm" '
+                f'href="{base}&page={target}">{label}</a>')
+
+    return (
+        f'<nav class="pager" aria-label="Call history pages">'
+        f'{link(page_no - 1, "Previous", page_no > 1)}'
+        f'<span class="count">Page {page_no} of {pages} &middot; {total} calls</span>'
+        f'{link(page_no + 1, "Next", page_no < pages)}'
+        f"</nav>"
+    )
+
+
+def initials(name: str) -> str:
+    """Up to two letters for the header avatar."""
+    parts = [p for p in (name or "").replace("&", " ").split() if p]
+    if not parts:
+        return "?"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[1][0]).upper()
+
+
+def nav_for(user) -> str:
+    """Header nav, a hamburger, and the account menu."""
+    if not user:
+        return (
+            '<nav class="nav-links" id="primary-nav">'
+            '<a href="/login">Sign in</a>'
+            '<a href="/signup">Sign up</a>'
+            "</nav>"
+            '<div class="header-right">'
+            '<a class="btn btn-primary btn-sm" href="/signup">Get started</a>'
+            "</div>"
+        )
+    name = esc(user["business_name"])
+    return (
+        '<nav class="nav-links" id="primary-nav">'
+        '<a href="/dashboard">Dashboard</a>'
+        '<a href="/numbers">Numbers</a>'
+        '<a href="/calls">Calls</a>'
+        '<a href="/settings/answering">Settings</a>'
+        "</nav>"
+        '<div class="header-right">'
+        '<a class="btn btn-ghost btn-sm" href="/talk" target="_blank" rel="noopener">'
+        "Talk to CallDesk</a>"
+        '<div class="user-menu">'
+        f'<button class="user-button" type="button" aria-haspopup="true" aria-expanded="false">'
+        f'<span class="avatar" aria-hidden="true">{initials(user["business_name"])}</span>'
+        f'<span class="user-name truncate">{name}</span>'
+        "</button>"
+        '<div class="dropdown" role="menu">'
+        '<div class="dropdown-head">'
+        f'<div class="who truncate">{name}</div>'
+        f'<div class="mail truncate">{esc(user["email"])}</div>'
+        "</div>"
+        '<a href="/dashboard" role="menuitem">Dashboard</a>'
+        '<a href="/numbers" role="menuitem">Numbers</a>'
+        '<a href="/settings/answering" role="menuitem">Settings</a>'
+        '<form method="post" action="/logout">'
+        '<button class="danger" type="submit" role="menuitem">Log out</button>'
+        "</form>"
+        "</div></div>"
+        "</div>"
+        '<button class="hamburger" id="nav-toggle" type="button" '
+        'aria-label="Menu" aria-expanded="false" aria-controls="primary-nav">'
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="2" stroke-linecap="round" aria-hidden="true">'
+        '<path d="M3 6h18M3 12h18M3 18h18"/></svg>'
+        "</button>"
+    )
 
 
 def note(text, kind=""):
-    css = f"note {kind}".strip()
-    return f'<div class="{css}">{text}</div>'
+    """A callout. `kind` is a legacy note kind, mapped onto the alert variants."""
+    css = {"err": "alert-danger", "danger": "alert-danger",
+           "warn": "alert-warning", "warning": "alert-warning",
+           "info": "alert-info", "ok": "alert-info"}.get(kind, "")
+    return f'<div class="alert {css}">{text}</div>'.replace("  ", " ")
 
 
 def error_box(message):
-    return note(f"<b>Something went wrong.</b> {esc(message)}", "err") if message else ""
+    return note(esc(message), "err") if message else ""
+
+
+def empty_state(icon, title, body, action=""):
+    """The centered placeholder shown when a list has nothing in it."""
+    return (
+        '<div class="empty-state">'
+        f'<div class="icon">{icon}</div>'
+        f"<h3>{esc(title)}</h3>"
+        f"<p>{body}</p>"
+        f'<div class="row">{action}</div>'
+        "</div>"
+    )
+
+
+ICON_EMPTY = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6'
+    'A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8'
+    'a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7'
+    'a2 2 0 0 1 1.7 2z"/></svg>'
+)
+
+
+def badge(text, kind):
+    return f'<span class="badge badge-{kind}">{esc(text)}</span>'
+
+
+URGENCY_BADGE = {"high": "danger", "medium": "warning", "low": "neutral"}
 
 
 def numbers_table(user_id):
     rows = db.list_phone_numbers(user_id)
     if not rows:
-        return '<p class="empty">No numbers bound yet.</p>'
+        return empty_state(
+            ICON_EMPTY, "No numbers bound yet",
+            "Bind a number from your Twilio account and CallDesk starts answering it.",
+            '<a class="btn btn-primary" href="/numbers">Choose a number</a>')
     cells = []
     for r in rows:
         mode = (r.get("answering_mode") or "agent").strip()
-        label = "Mode A" if mode == "agent" else "Mode B"
-        pill = "ok" if mode == "agent" else "medium"
         number = esc(r["phone_number"])
+        if mode == "agent":
+            mode_badge = badge("CallDesk answers", "success")
+        else:
+            mode_badge = badge("Ring mobile first", "warning")
+        bound = (r.get("agent_id") or "").strip()
+        agent_cell = (f'<span class="badge badge-neutral badge-plain mono">'
+                      f'{esc(bound[:18])}</span>' if bound else
+                      '<span class="muted">Not set</span>')
         cells.append(
-            f'<tr><td class="mono">{number}</td>'
-            f'<td><span class="pill {pill}">{label}</span></td>'
-            f'<td class="mono muted">{esc((r.get("agent_id") or "-")[:18])}</td>'
-            f'<td><a class="btn sm" href="/settings/answering?number={number}">Configure</a></td>'
+            f'<tr><td data-label="Number"><span class="mono">{number}</span></td>'
+            f'<td data-label="Answering mode">{mode_badge}</td>'
+            f'<td data-label="Bound agent">{agent_cell}</td>'
+            f'<td data-label="Actions"><a class="btn btn-secondary btn-sm" '
+            f'href="/settings/answering?number={urllib.parse.quote(number)}">Configure</a></td>'
             "</tr>"
         )
-    return ("<table><thead><tr><th>Phone Number</th><th>Answering Mode</th>"
-            f"<th>Bound Agent</th><th>Actions</th></tr></thead>"
+    return ('<table class="table"><thead><tr><th>Number</th><th>Answering mode</th>'
+            "<th>Bound agent</th><th>Actions</th></tr></thead>"
             f'<tbody>{"".join(cells)}</tbody></table>')
 
 
 def available_numbers_table(account_sid, bound_numbers, error=""):
     """What the customer's Twilio account actually owns."""
     if not account_sid:
-        return ('<p class="muted">Connect your Twilio account to see your numbers.</p>')
+        return empty_state(
+            ICON_EMPTY, "Connect your Twilio account first",
+            "CallDesk needs a Twilio account to see the numbers you can hand to it.",
+            '<a class="btn btn-primary" href="/connect/twilio">Connect Twilio</a>')
     if error:
         return error_box(error)
     try:
@@ -213,59 +351,75 @@ def available_numbers_table(account_sid, bound_numbers, error=""):
     except tc.TwilioError as err:
         return error_box(str(err))
     if not numbers:
-        return ('<p class="muted">No phone numbers in your Twilio account. '
-                '<a href="https://console.twilio.com/phone-numbers/incoming" '
-                'target="_blank" rel="noopener">Buy a number on Twilio</a> '
-                "and return here to bind it.</p>")
+        return empty_state(
+            ICON_EMPTY, "No phone numbers in your Twilio account",
+            'Buy a number on Twilio, then come back and bind it. '
+            '<a href="https://console.twilio.com/phone-numbers/incoming" '
+            'target="_blank" rel="noopener">Buy a number on Twilio</a>.',
+            '<a class="btn btn-secondary" href="https://console.twilio.com/'
+            'phone-numbers/incoming" target="_blank" rel="noopener">Open Twilio</a>')
     rows = []
     for n in numbers:
         already = n["phone_number"] in bound_numbers
-        action = ('<span class="pill ok">bound</span>' if already else
-                  '<form method="post" action="/numbers/bind">'
-                  f'<input type="hidden" name="phone_number" value="{esc(n["phone_number"])}">'
-                  '<button class="btn sm primary" type="submit">Bind to CallDesk</button>'
-                  "</form>")
+        if already:
+            action = badge("Bound", "success")
+        else:
+            action = ('<form method="post" action="/numbers/bind">'
+                      f'<input type="hidden" name="phone_number" value="{esc(n["phone_number"])}">'
+                      '<button class="btn btn-primary btn-sm" type="submit">'
+                      "Bind to CallDesk</button></form>")
         rows.append(
-            f'<tr><td class="mono">{esc(n["phone_number"])}</td>'
-            f'<td class="muted">{esc(n["friendly_name"])}</td>'
-            f'<td>{action}</td></tr>'
+            f'<tr><td data-label="Number"><span class="mono">{esc(n["phone_number"])}</span></td>'
+            f'<td data-label="Name"><span class="muted">{esc(n["friendly_name"])}</span></td>'
+            f'<td data-label="Action">{action}</td></tr>'
         )
-    return ("<table><thead><tr><th>Phone Number</th><th>Name</th><th>Action</th>"
+    return ('<table class="table"><thead><tr><th>Number</th><th>Name</th><th>Action</th>'
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table>')
 
 
-def calls_table(user_id, limit=None, with_callback=False, with_transcript=False,
-                from_number=""):
-    rows = db.list_calls(user_id, limit=limit)
+def calls_table(user_id, limit=None, offset=0, since=None, with_callback=False,
+                with_transcript=False, from_number=""):
+    rows = db.list_calls(user_id, limit=limit, offset=offset, since=since)
     if not rows:
-        return '<p class="empty">No calls logged yet.</p>'
+        if since:
+            return empty_state(
+                ICON_EMPTY, "No calls in this range",
+                "Nothing was logged in the period you picked.")
+        return empty_state(
+            ICON_EMPTY, "No calls yet",
+            "Once someone calls your CallDesk number, they'll show up here.",
+            '<a class="btn btn-secondary" href="/numbers">Bind a number</a>')
     out = []
     for r in rows:
         extra = ""
         if with_transcript:
             text = (r.get("transcript") or "").strip()
             body = esc(text) if text else "No transcript was stored for this call."
-            extra += (f'<details><summary>View transcript</summary>'
-                      f'<div class="transcript">{body}</div></details>')
+            extra += ('<details><summary>View transcript</summary>'
+                      f'<div class="transcript-box">{body}</div></details>')
         if with_callback and (r.get("callback_number") or "").strip():
-            extra += (f'<form method="post" action="/calls/callback" style="margin-top:8px">'
+            extra += ('<form method="post" action="/calls/callback">'
                       f'<input type="hidden" name="call_id" value="{esc(r["id"])}">'
                       f'<input type="hidden" name="from_number" value="{esc(from_number)}">'
-                      f'<button class="btn sm primary" type="submit">Call Back</button>'
-                      f"</form>")
+                      '<button class="btn btn-secondary btn-sm" type="submit">Call back</button>'
+                      "</form>")
+        urgency = urgency_class(r.get("urgency"))
+        caller = esc(r.get("caller_name") or "Unknown")
+        number = r.get("callback_number") or ""
+        when = esc(str(r.get("created_at") or ""))
         out.append(
-            f"<tr>"
-            f'<td>{esc(str(r.get("created_at") or ""))}</td>'
-            f'<td>{esc(r.get("caller_name") or "Unknown")}</td>'
-            f'<td class="mono">{esc(r.get("callback_number") or "-")}</td>'
-            f'<td>{esc(r.get("problem") or "-")}</td>'
-            f'<td><span class="pill {urgency_class(r.get("urgency"))}">'
-            f'{esc(urgency_class(r.get("urgency")))}</span></td>'
-            f"<td>{extra}</td>"
-            f"</tr>"
+            "<tr>"
+            f'<td data-label="Caller">{caller}</td>'
+            f'<td data-label="Number"><span class="mono">'
+            f'{esc(number) if number else "-"}</span></td>'
+            f'<td data-label="Problem">{esc(r.get("problem") or "-")}</td>'
+            f'<td data-label="Urgency">{badge(urgency, URGENCY_BADGE[urgency])}</td>'
+            f'<td data-label="When"><span class="nowrap muted">{when}</span></td>'
+            + (f'<td data-label="Actions">{extra}</td>' if extra else "")
+            + "</tr>"
         )
-    head = ("<table><thead><tr><th>When</th><th>Caller</th><th>Number</th>"
-            "<th>Problem</th><th>Urgency</th>")
+    head = ('<table class="table"><thead><tr><th>Caller</th><th>Number</th>'
+            "<th>Problem</th><th>Urgency</th><th>When</th>")
     if with_callback or with_transcript:
         head += "<th>Actions</th>"
     head += "</tr></thead>"
@@ -278,18 +432,26 @@ def twilio_banner(user, message="", kind="warn"):
         return note(message, kind)
     conn = db.get_twilio_connection(user["id"])
     if conn:
-        return (note(f'Twilio connected as <span class="mono">'
-                     f'{esc(conn["account_sid"])}</span> &middot; '
-                     '<a href="/numbers">Manage Numbers</a>'))
+        return note(
+            f'Connected as <span class="mono">{esc(conn["account_sid"])}</span> &middot; '
+            '<a href="/numbers">Manage numbers</a>', "ok")
     if not tc.connect_configured():
         return note(
-            "<b>Connect your Twilio account</b> to receive calls. You'll be "
-            "redirected to Twilio to sign up or log in. Twilio bills you directly "
-            "for call usage."
-            f'<div class="row" style="margin-top:12px">'
-            f'<a class="btn" href="/connect/twilio">Connect Twilio</a></div>'
-            f'<p class="muted" style="margin-top:12px;font-size:13px">{esc(CONNECT_NOT_CONFIGURED)}</p>',
+            "<b>Twilio Connect isn't configured on this deployment yet.</b> "
+            "An admin has to create a Twilio Connect App, which needs an upgraded "
+            "Twilio account, and set TWILIO_CONNECT_APP_SID in .env. "
+            "The full Connect flow is already coded and ready to activate."
+            '<div class="row"><a class="btn btn-primary" href="/numbers">'
+            "See your numbers</a></div>"
+            f'<p>{esc(CONNECT_NOT_CONFIGURED)}</p>',
             kind)
+    return note(
+        "<b>Connect your Twilio account</b> to start receiving calls. You'll be "
+        "redirected to Twilio to sign up or log in, and Twilio bills you directly "
+        "for call usage."
+        '<div class="row"><a class="btn btn-primary" href="/connect/twilio">'
+        "Connect Twilio</a></div>",
+        kind)
     return note(
         "<b>Connect your Twilio account</b> to receive calls. You'll be "
         "redirected to Twilio to sign up or log in. Twilio bills you directly "
@@ -310,7 +472,7 @@ GET_ONLY = {"/", "/dashboard", "/numbers", "/calls", "/talk",
             "/connect/twilio", "/connect/twilio/callback",
             "/auth/google", "/auth/google/callback",
             "/twiml/fallback", "/twiml/outbound", "/app.js",
-            "/token", "/agent"}
+            "/token", "/agent", "/static/style.css"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -335,12 +497,19 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, document.encode("utf-8"), "text/xml; charset=utf-8")
 
     def _redirect(self, location: str, extra: Optional[dict] = None,
-                  status: int = 302) -> None:
+                  status: int = 302, flash: str = "", kind: str = "ok") -> None:
+        """A redirect, optionally carrying a one-shot toast message.
+
+        The flash rides a second Set-Cookie, so it can travel alongside the
+        session cookie in `extra`.
+        """
         self.send_response(status)
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
         for key, value in (extra or {}).items():
             self.send_header(key, value)
+        if flash:
+            self.send_header("Set-Cookie", flash_cookie(flash, kind))
         self.end_headers()
 
     def _form(self) -> dict:
@@ -349,13 +518,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.parse_qs(raw.decode("utf-8", "replace"))
         return {k: v[0] for k, v in parsed.items()}
 
-    def _host(self):
-        """The host the customer reached us on. Only a fallback for the Google
-        redirect URI when CALLDESK_BASE_URL is unset, which is not safe to
-        trust from a header in production."""
-        return self.headers.get("Host") or ""
-
-    def _query(self):        return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+    def _query(self):
+        return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
 
     def _one(self, key):
         return (self._query().get(key) or [""])[0]
@@ -401,6 +565,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/app.js":
             self._send(200, (HERE / "app.js").read_bytes(), "text/javascript")
             return
+        if path == "/static/style.css":
+            css = STATIC / "style.css"
+            if not css.exists():
+                self._send(404, b"/* missing */", "text/css")
+                return
+            self._send(200, css.read_bytes(), "text/css; charset=utf-8",
+                       {"Cache-Control": "public, max-age=300"})
+            return
         if path == "/talk":
             self._html(PAGE.encode())
             return
@@ -427,6 +599,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._html(page("login.html", "Log in", nav_for(None),
                             EMAIL=self._one("email"),
+                            GOOGLE_MARK=GOOGLE_MARK,
                             GOOGLE_HINT=google_hint()))
             return
 
@@ -438,6 +611,7 @@ class Handler(BaseHTTPRequestHandler):
                             EMAIL=self._one("email"),
                             BUSINESS_NAME=self._one("business_name"),
                             MOBILE_NUMBER=self._one("mobile_number"),
+                            GOOGLE_MARK=GOOGLE_MARK,
                             GOOGLE_HINT=google_hint()))
             return
 
@@ -478,20 +652,23 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             return
         numbers = db.list_phone_numbers(user["id"])
-        calls = db.list_calls(user["id"])
         message = ""
         kind = "warn"
+        flash = ""
         if self._one("error"):
             message, kind = f'<b>Could not bind that number.</b> {esc(self._one("error"))}', "err"
         elif self._one("ok"):
             message = f'<b>Bound.</b> {esc(self._one("ok"))}'
-            kind = ""
+            kind = "info"
         self._html(page(
             "dashboard.html", "Dashboard", nav_for(user),
             BUSINESS_NAME=user["business_name"], EMAIL=user["email"],
             TWILIO_BANNER=twilio_banner(user, message, kind),
             NUMBERS=numbers_table(user["id"]),
             RECENT_CALLS=calls_table(user["id"], limit=10),
+            CALLS_TODAY=db.count_calls(user["id"], since=utc_day()),
+            CALLS_WEEK=db.count_calls(user["id"], since=utc_day(days_ago=7)),
+            NUMBERS_COUNT=len(numbers),
         ))
 
     def _numbers(self) -> None:
@@ -505,8 +682,10 @@ class Handler(BaseHTTPRequestHandler):
         )
         banner = ""
         if conn:
-            banner = (note(f'Twilio connected as <span class="mono">'
-                           f'{esc(conn["account_sid"])}</span>'))
+            banner = note(
+                f'Connected as <span class="mono">{esc(conn["account_sid"])}</span> '
+                f'&middot; {len(bound)} number{"s" if len(bound) != 1 else ""} bound',
+                "ok")
         elif not tc.connect_configured():
             banner = note(esc(CONNECT_NOT_CONFIGURED), "warn")
         self._html(page(
@@ -540,10 +719,10 @@ class Handler(BaseHTTPRequestHandler):
         self._html(page(
             "answering.html", "Answering settings", nav_for(user),
             PHONE_NUMBER=number, FORWARD_TO=forward,
-            SEL_AGENT='selected' if mode == "agent" else '',
-            SEL_HUMAN='selected' if mode == "human_first" else '',
-            MODE_A_PILL="ok" if mode == "agent" else "off",
-            MODE_B_PILL="medium" if mode == "human_first" else "off",
+            SEL_AGENT='checked' if mode == "agent" else '',
+            SEL_HUMAN='checked' if mode == "human_first" else '',
+            MODE_A_PILL="success" if mode == "agent" else "neutral",
+            MODE_B_PILL="warning" if mode == "human_first" else "neutral",
             ERROR=error_box(self._one("error")),
         ))
 
@@ -553,21 +732,37 @@ class Handler(BaseHTTPRequestHandler):
             return
         conn = db.get_twilio_connection(user["id"])
         numbers = [r["phone_number"] for r in db.list_phone_numbers(user["id"])]
-        calls = db.list_calls(user["id"])
+
+        # All / Today / This week, then a page of 25.
+        span = self._one("range")
+        since = utc_day() if span == "today" else (
+            utc_day(days_ago=7) if span == "week" else None)
+        total = db.count_calls(user["id"], since=since)
+        page_no = max(1, int(self._one("page") or 1) or 1)
+        per_page = 25
+        pages = max(1, (total + per_page - 1) // per_page)
+        page_no = min(page_no, pages)
+        offset = (page_no - 1) * per_page
+
         self._html(page(
             "calls.html", "Calls", nav_for(user),
-            BUSINESS_NAME=user["business_name"], CALL_COUNT=len(calls),
+            BUSINESS_NAME=user["business_name"], CALL_COUNT=total,
             ERROR=self._call_message(conn, numbers, self._one("error"), self._one("ok")),
             # Callers are called back from the first bound number.
-            CALLS=calls_table(user["id"], with_callback=True, with_transcript=True,
+            CALLS=calls_table(user["id"], limit=per_page, offset=offset, since=since,
+                              with_callback=True, with_transcript=True,
                               from_number=numbers[0] if numbers else ""),
+            FILTER_ALL="" if span else "btn-primary",
+            FILTER_TODAY="btn-primary" if span == "today" else "",
+            FILTER_WEEK="btn-primary" if span == "week" else "",
+            PAGER=pager(page_no, pages, total, span),
         ))
 
     def _call_message(self, conn, numbers, error, ok):
         if error:
             return error_box(error)
         if ok:
-            return note(f'<b>Call placed.</b> {esc(ok)}')
+            return note(f'<b>Call placed.</b> {esc(ok)}', "ok")
         if not conn:
             return note("Connect Twilio before calling callers back.", "warn")
         if not numbers:
@@ -625,7 +820,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/logout":
             auth.delete_session(self._session_token())
-            self._redirect("/", {"Set-Cookie": auth.clear_cookie()}, status=303)
+            self._redirect("/", {"Set-Cookie": auth.clear_cookie()}, status=303,
+                           flash="Signed out.")
             return
         if path == "/numbers/bind":
             self._bind(form)
@@ -648,33 +844,34 @@ class Handler(BaseHTTPRequestHandler):
     def _google_start(self) -> None:
         """Send the customer to Google's consent screen.
 
-        A signed-in customer is passed through rather than bounced to /login:
-        the state carries their user id so the callback knows who is arriving.
+        Someone already signed in carries their user id through as the state,
+        so the callback knows who is arriving. A new customer gets an empty
+        state and is created from their Google profile on the way back.
         """
         try:
             user = self._user()
-            state = str(user["id"]) if user else ""
-            url = google_auth.get_google_auth_url(state, self._host())
+            url = google_auth.get_google_auth_url(
+                str(user["id"]) if user else "")
         except google_auth.GoogleAuthError as err:
             self._html(google_login_page(str(err)), status=400)
             return
         self._redirect(url)
 
     def _google_callback(self) -> None:
-        """Google sends ?code= and ?state=. State is single-use and expires."""
-        params = self._query()
-        if params.get("error"):
-            reason = (params.get("error_description")
+        """Google sends ?code= and ?state= back. _one() because _query()
+        hands back every value as a list, and state has to be a string to
+        look up."""
+        if self._one("error"):
+            reason = (self._one("error_description")
                       or "Google sign-in was cancelled.")[:200]
             self._html(google_login_page(f"Google sign-in failed. {reason}"),
                        status=400)
             return
         try:
-            # Burn the state token before anything else, so a replayed callback
+            # Burn the state before anything else, so a replayed callback
             # cannot mint a second session.
-            google_auth.consume_state(params.get("state"))
-            profile = google_auth.exchange_code_for_user(
-                params.get("code"), self._host())
+            google_auth.consume_state(self._one("state"))
+            profile = google_auth.exchange_code_for_user(self._one("code"))
             user = google_auth.find_or_create_google_user(
                 profile["email"], profile["google_id"], profile.get("name", ""))
         except google_auth.GoogleAuthError as err:
@@ -691,9 +888,10 @@ class Handler(BaseHTTPRequestHandler):
                 "That Google account could not be set up. Please try again."),
                 status=400)
             return
-        self._redirect("/dashboard",
-                       {"Set-Cookie": auth.set_cookie(auth.create_session(user["id"]))},
-                       status=303)
+        self._redirect(
+            "/dashboard",
+            {"Set-Cookie": auth.set_cookie(auth.create_session(user["id"]))},
+            status=303)
 
     def _signup(self, form) -> None:
         email = (form.get("email") or "").strip().lower()
@@ -717,7 +915,8 @@ class Handler(BaseHTTPRequestHandler):
         user_id = db.create_user(email, auth.hash_password(password), business, mobile)
         token = auth.create_session(user_id)
         print(f"New account: {business} <{email}>", flush=True)
-        self._redirect("/dashboard", {"Set-Cookie": auth.set_cookie(token)}, status=303)
+        self._redirect("/dashboard", {"Set-Cookie": auth.set_cookie(token)}, status=303,
+                       flash=f"Welcome to CallDesk, {business}.")
 
     def _login(self, form) -> None:
         email = (form.get("email") or "").strip().lower()
@@ -728,7 +927,8 @@ class Handler(BaseHTTPRequestHandler):
                             "Wrong email or password.", {"EMAIL": email}, status=401)
             return
         token = auth.create_session(user["id"])
-        self._redirect("/dashboard", {"Set-Cookie": auth.set_cookie(token)}, status=303)
+        self._redirect("/dashboard", {"Set-Cookie": auth.set_cookie(token)}, status=303,
+                       flash="Signed in.")
 
     def _bind(self, form) -> None:
         user = self._require_user()
@@ -749,7 +949,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         db.add_phone_number(user["id"], number, agent_id=AGENT["id"])
         print(f"Bound {number} to {AGENT['id']} for {user['business_name']}", flush=True)
-        self._redirect(f"/dashboard?ok={urllib.parse.quote('Bound ' + number)}")
+        self._redirect(f"/dashboard?ok={urllib.parse.quote('Bound ' + number)}",
+                       flash=f"{number} is now answered by CallDesk.")
 
     def _save_answering(self, form) -> None:
         user = self._require_user()
@@ -779,9 +980,11 @@ class Handler(BaseHTTPRequestHandler):
                            + urllib.parse.quote(str(err)[:250]))
             return
         db.update_phone_number_mode(user["id"], number, mode, forward_to or None)
-        label = "Mode A" if mode == "agent" else "Mode B"
+        label = ("CallDesk answers directly" if mode == "agent"
+                 else "Ring mobile first, then CallDesk")
         self._redirect(f"/settings/answering?number={urllib.parse.quote(number)}"
-                       f"&ok={urllib.parse.quote('Saved ' + label)}")
+                       f"&ok={urllib.parse.quote('Saved ' + label)}",
+                       flash=f"Answering mode saved for {number}.")
 
     def _own_number(self, user, requested=""):
         """The Twilio number to place a call from.
@@ -823,7 +1026,9 @@ class Handler(BaseHTTPRequestHandler):
         except tc.TwilioError as err:
             self._redirect("/calls?error=" + urllib.parse.quote(str(err)[:250]))
             return
-        self._redirect(f"/calls?ok={urllib.parse.quote('Calling ' + target + ' back (call ' + (sid or 'placed') + ')')}")
+        self._redirect(
+            f"/calls?ok={urllib.parse.quote('Calling ' + target + ' back (call ' + (sid or 'placed') + ')')}",
+            flash=f"Calling {target} back.")
 
     # --- send_summary ---------------------------------------------------
 

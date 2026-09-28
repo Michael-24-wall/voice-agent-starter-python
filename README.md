@@ -46,11 +46,10 @@ The agent's behaviour is entirely in [agents/calldesk.jsonc](agents/calldesk.jso
 - **Each user binds their own numbers.** `POST /v1/phone-numbers/import` registers a number with AssemblyAI, then `PUT /v1/phone-numbers/{number}/agent` attaches the agent to it.
 - **Each user sees only their own calls.** Every `send_summary` call is filed against the account that owns the receiving number, and the dashboard and call log are scoped to that account.
 - **Twilio bills the customer directly** for their own number and for call usage. CallDesk is an application on top of it and never touches telecom billing.
-- **Sign in with a password or Google.** A Google sign-in whose email already matches a password account links to it rather than creating a duplicate, so call history is never orphaned.
 
 Storage is SQLite at `data/calldesk.db` (gitignored): `users`, `sessions`, `twilio_connections`, `phone_numbers`, `calls`. [auth.py](auth.py) does PBKDF2-SHA256 password hashing; session tokens live in the `sessions` table, so a restart does not log anyone out.
 
-Customers sign in with a password or with Google, and either way they land in the same `users` row. A Google account whose email already matches a password account is linked to it instead of creating a second one, so signing up twice does not orphan call history. [google_auth.py](google_auth.py) handles the handshake.
+Users sign up with an email and password or with Google. A Google sign-in whose email already matches a password account is linked to it rather than creating a duplicate, so signing up twice never orphans call history. [auth.py](auth.py) hashes with PBKDF2-SHA256 and a per-password random salt, compares in constant time, and stores session tokens in the `sessions` table so a restart does not log anyone out. The session cookie is `calldesk_session`, `HttpOnly`, `SameSite=Lax`, `Path=/`. [google_auth.py](google_auth.py) runs the Google handshake with `google-auth` and `google-auth-oauthlib`.
 
 ## Google OAuth Setup
 
@@ -60,18 +59,24 @@ One-time setup, in the Google Cloud Console:
 2. **Create credentials -> OAuth client ID**.
 3. Choose **Web application** under Application type. The consent screen name is what customers see.
 4. Under **Authorized redirect URIs**, add exactly:
-   `https://your-app.onrender.com/auth/google/callback`
-   The scheme, host, port and path must match character for character. `localhost` is not accepted by Google, so local sign-in needs `http://localhost:3000` added as a second URI and `CALLDESK_BASE_URL` left unset locally.
+   `https://your-vultr-host/auth/google/callback`
+   The scheme, host, port and path must match character for character, or Google rejects the exchange. `localhost` is not accepted, so local sign-in needs `http://localhost:3000/auth/google/callback` added as a second URI.
 5. Copy the **Client ID** and **Client secret** into `.env`:
    ```sh
    GOOGLE_CLIENT_ID=...apps.googleusercontent.com
    GOOGLE_CLIENT_SECRET=...
    ```
-6. Keep `CALLDESK_BASE_URL` set to your public origin. `google_auth.py` derives the redirect URI from it.
+6. Keep `CALLDESK_BASE_URL` set to your public origin. `google_auth.py` builds the redirect URI from it, and it has to match what you registered.
 
-If either value is missing, the **Continue with Google** button says so on the page instead of failing silently. Bad state, a declined consent screen, and a failed token exchange all return to the login page with a readable reason. State tokens are single-use and expire after ten minutes.
+If either value is missing, the **Sign in with Google** button says so on the page instead of failing silently. An invalid or expired state token, a declined consent screen, and a failed token exchange all return to the login page with a readable reason. State tokens are single-use and expire after ten minutes.
 
 ## Twilio Connect Setup
+
+**This step requires an upgraded Twilio account.** Creating a Connect App is a
+paid Twilio feature, so it is the one thing in this project that cannot be done
+on a trial account. The code for the whole flow is written and tested, so it
+activates the moment an admin sets the SID. Until then the dashboard says so
+explicitly and every other part of CallDesk still works.
 
 One-time setup, in the Twilio Console:
 
@@ -79,6 +84,17 @@ One-time setup, in the Twilio Console:
 2. Set its **Authorize URL** to `{CALLDESK_BASE_URL}/connect/twilio/callback`.
 3. Enable the **"Charge account for usage"** permission so the customer is billed for the numbers they use.
 4. Copy the Connect App SID into `.env` as `TWILIO_CONNECT_APP_SID`.
+
+### The customer flow, end to end
+
+1. The owner signs up, then clicks **Connect Twilio** on the dashboard.
+2. CallDesk redirects to `https://connect.twilio.com/authorize` with the Connect App SID and their user id as state.
+3. The owner signs up for Twilio if they do not have an account, or logs in to an existing one, and authorizes CallDesk.
+4. Twilio redirects back to `/connect/twilio/callback?AccountSid=AC...&state=<user_id>`. CallDesk saves the account sid against that user.
+5. The owner buys a number in the Twilio console, or already has one.
+6. Back in CallDesk, `/numbers` lists their real Twilio numbers. They pick one and **Bind**.
+7. Binding imports the number to AssemblyAI with `POST /v1/phone-numbers/import`, then attaches the CallDesk agent with `PUT /v1/phone-numbers/{number}/agent`.
+8. They choose an answering mode under **Numbers -> Configure**. The call now reaches the agent.
 
 Also in `.env`, for this instance:
 
@@ -116,7 +132,7 @@ So CallDesk is the fallback: 20 seconds for you, then the agent. The bin is crea
 ## Run locally
 
 ```sh
-cp .env.example .env      # ASSEMBLYAI_API_KEY, plus CALLDESK_BASE_URL to sign in with Google
+cp .env.example .env      # ASSEMBLYAI_API_KEY, plus CALLDESK_BASE_URL for Twilio
 AGENT=calldesk python publish.py
 AGENT=calldesk python deployment/browser/server.py
 ```
@@ -126,8 +142,8 @@ AGENT=calldesk python deployment/browser/server.py
 
 There is no demo account and no seeded data. The first account to sign up owns
 the database, and every later signup gets its own isolated rows. Create one at
-<http://localhost:3000/signup> with an email and password, or with Google if
-`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set.
+<http://localhost:3000/signup> with your business name, email, and a password of at
+least 8 characters. Mobile number is optional and only used by Mode B.
 
 `send_summary` is an HTTP tool, so its URL must be a public https address AssemblyAI can reach. Put a tunnel URL in `CALLDESK_TOOL_URL` in `.env` and re-run `publish.py` whenever it changes.
 
@@ -143,10 +159,46 @@ the database, and every later signup gets its own isolated rows. Create one at
 | Sign-in | Email and password, plus Google OAuth 2.0 |
 | Frontend | Server-rendered HTML from `templates/`, no build step |
 
-No `pip install` is needed to run any of this. `google_auth.py` verifies Google
-sign-ins through Google's own token and userinfo endpoints rather than pulling
-in `google-auth`, and Twilio REST calls go through `lib.py` rather than the
-`twilio` SDK.
+### Requirements
+
+```sh
+pip install google-auth google-auth-oauthlib requests twilio
+```
+
+The database is `sqlite3` rather than an ORM. Twilio REST calls go through the
+`twilio` SDK. Google sign-in uses `google-auth` to verify the ID token's
+signature against Google's public keys.
+
+---
+
+## Deployment
+
+Vultr is a good fit: a plain VPS, no build step, and no external database to
+operate.
+
+1. Create a VPS and point an A record at it, so `call.yourdomain.com` resolves.
+2. `apt install python3` and clone the repo, then copy `.env.example` to `.env` and fill it in. At minimum: `ASSEMBLYAI_API_KEY`, `CALLDESK_BASE_URL=https://call.yourdomain.com`, `AGENT_ID_CALLDESK`, and the Twilio values above.
+3. Keep the process alive across reboots and restarts. A systemd unit is the least surprising option:
+   ```ini
+   # /etc/systemd/system/calldesk.service
+   [Unit]
+   Description=CallDesk
+   After=network.target
+
+   [Service]
+   WorkingDirectory=/opt/calldesk
+   Environment=AGENT=calldesk
+   ExecStart=/usr/bin/python3 deployment/browser/server.py
+   Restart=always
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+   ```sh
+   systemctl enable --now calldesk
+   ```
+4. Terminate TLS in front of the app with nginx or Caddy. Google refuses any redirect URI that is not `https`, so the public origin must be https. The app itself is plain HTTP on port 3000.
+5. Re-run `AGENT=calldesk python publish.py` if `CALLDESK_TOOL_URL` changes, since the `send_summary` tool URL is baked into the published agent.
 
 ---
 

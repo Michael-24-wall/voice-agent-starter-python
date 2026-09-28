@@ -1,30 +1,47 @@
-<h1>{{BUSINESS_NAME}}</h1>
-<p class="sub">Signed in as {{EMAIL}}</p>
-
-{{TWILIO_BANNER}}
-
-<h2>Recent calls</h2>
-<div class="panel">
-  {{RECENT_CALLS}}
-  <div class="row" style="margin-top:16px">
-    <a class="btn sm" href="/calls">View all calls</a>
-    <a class="btn sm" href="/numbers">Manage numbers</a>
-    <a class="btn sm" href="/settings/answering">Answering settings</a>
+<div class="page-head">
+  <div>
+    <h1>Welcome back, {{BUSINESS_NAME}}</h1>
+    <p class="sub">{{EMAIL}}</p>
+  </div>
+  <div class="row-end">
+    <a class="btn btn-secondary" href="/settings/answering">Answering settings</a>
+    <a class="btn btn-primary" href="/talk" target="_blank" rel="noopener">Talk to CallDesk</a>
   </div>
 </div>
 
-<h2>Phone numbers</h2>
-<div class="panel">
-  {{NUMBERS}}
+<div class="stat-grid">
+  <div class="card card-hover">
+    <div class="stat-label">Calls today</div>
+    <div class="card-value">{{CALLS_TODAY}}</div>
+  </div>
+  <div class="card card-hover">
+    <div class="stat-label">Calls this week</div>
+    <div class="card-value">{{CALLS_WEEK}}</div>
+  </div>
+  <div class="card card-hover">
+    <div class="stat-label">Phone numbers</div>
+    <div class="card-value">{{NUMBERS_COUNT}}</div>
+  </div>
 </div>
 
-<h2>Try the voice agent</h2>
-<div class="panel">
-  <p class="muted">
-    Opens the browser voice UI in a new tab. The agent uses the browser
-    microphone, so it answers in your own voice rather than over Twilio.
-  </p>
-  <div class="row" style="margin-top:14px">
-    <a class="btn primary" href="/talk" target="_blank" rel="noopener">Talk to CallDesk</a>
+{{TWILIO_BANNER}}
+
+<div class="card" style="padding:0">
+  <div class="row-between" style="padding:20px 24px 16px">
+    <div class="card-title" style="margin:0">Recent calls</div>
+    <a class="btn btn-ghost btn-sm" href="/calls">View all calls</a>
+  </div>
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{RECENT_CALLS}}
+  </div>
+</div>
+
+<div class="card" style="padding:0">
+  <div class="row-between" style="padding:20px 24px 16px">
+    <div class="card-title" style="margin:0">Your numbers</div>
+    <a class="btn btn-ghost btn-sm" href="/numbers">Manage numbers</a>
+  </div>
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{NUMBERS}}
   </div>
 </div>

@@ -1,15 +1,31 @@
-<h1>Phone numbers</h1>
-<p class="sub">Bind a number you own to the CallDesk agent.</p>
+<div class="page-head">
+  <div>
+    <h1>Your phone numbers</h1>
+    <p class="sub">Pick a number to hand to CallDesk, then decide how it answers.</p>
+  </div>
+  <div class="row-end">
+    <a class="btn btn-secondary" href="/numbers?refresh=1">Refresh from Twilio</a>
+  </div>
+</div>
 
 {{ERROR}}
 {{TWILIO_BANNER}}
 
-<h2>Your numbers</h2>
-<div class="panel">
-  {{NUMBERS}}
+<div class="card" style="padding:0">
+  <div class="row-between" style="padding:20px 24px 16px">
+    <div class="card-title" style="margin:0">Bound to CallDesk</div>
+    <a class="btn btn-ghost btn-sm" href="/settings/answering">Answering settings</a>
+  </div>
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{NUMBERS}}
+  </div>
 </div>
 
-<h2>Available in your Twilio account</h2>
-<div class="panel">
-  {{AVAILABLE}}
+<div class="card" style="padding:0">
+  <div class="row-between" style="padding:20px 24px 16px">
+    <div class="card-title" style="margin:0">Available in your Twilio account</div>
+  </div>
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{AVAILABLE}}
+  </div>
 </div>

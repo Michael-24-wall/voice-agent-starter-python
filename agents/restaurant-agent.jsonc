@@ -1,0 +1,90 @@
+// Reservations: the inbound call assistant for a restaurant.
+//
+// This file is the request body for POST /v1/agents. There is no wrapper and no
+// field the API does not define. The base agent is published once with
+// agent_manager.publish_user_agent(), which fills in {business_name} and the
+// tool URLs, so each restaurant gets its own agent rather than sharing one.
+//
+// https://www.assemblyai.com/docs/voice-agents/voice-agent-api/create-agent
+{
+  // {business_name} is replaced with the account's own name at publish time.
+  "name": "{business_name} Reservations",
+
+  // Read aloud, so short spoken sentences, no lists, no formatting.
+  // The last two lines matter: table numbers and times only come from a tool,
+  // and a failed tool means the caller is told so, not guessed around.
+  // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/prompting-guide
+  "system_prompt": "You are the reservation assistant for {business_name}, a restaurant. Help callers check table availability and book a table. Collect the guest name, phone number, date, time, and party size. Call check_tables before offering a time, then book_table to confirm. If a tool returns ok false, say what went wrong in plain words, for example that the table is already taken at that time or is too small for the party. Never state a table number, a time, or a seating you did not get from a tool. Keep responses under 2 sentences. Do not make up information you were not given.",
+
+  // Without a greeting the agent says nothing when the call connects, and
+  // silence on a fresh line reads as a dropped call.
+  // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/greeting
+  "greeting": "Thanks for calling {business_name}. How many guests will be dining with us?",
+
+  // Voice catalog: https://www.assemblyai.com/docs/voice-agents/voice-agent-api/voices
+  // alba is US English. Immutable once a session starts, so it only affects
+  // calls that begin after the change.
+  "voice": { "voice_id": "alba" },
+
+  "tools": [
+    {
+      // Read by the model to decide when to call it, so it says when to use
+      // the tool, not just what the tool does.
+      "name": "check_tables",
+      "description": "Find tables that are free and large enough for the party at a given date and time. Use before confirming a reservation.",
+
+      // interactive keeps the agent talking while the query runs, so a slow
+      // or failing tool never reads as a dropped line. hold would silence the
+      // agent until a result came back.
+      // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/overview#execution-modes
+      "execution_mode": "interactive",
+      "timeout_seconds": 30,
+
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "datetime": { "type": "string", "description": "Requested date and time, as YYYY-MM-DD HH:MM" },
+          "party_size": { "type": "integer", "description": "Number of guests" }
+        },
+        "required": ["datetime", "party_size"]
+      },
+
+      // AssemblyAI makes this request, not the browser, so the tool also works
+      // on a phone call. The URL must be a public https address: the API
+      // rejects http:// outright, and 127.0.0.1 or localhost resolve on
+      // AssemblyAI's own servers rather than on this machine.
+      // ${CALLDESK_TOOL_BASE} is the /tool prefix, in .env so the tunnel
+      // hostname can change without editing here. agent_manager falls back to
+      // deriving it from CALLDESK_TOOL_URL.
+      // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/http-tools
+      "http": {
+        "url": "${CALLDESK_TOOL_BASE}/check_tables",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "book_table",
+      "description": "Book a specific table for a party. Only call after check_tables confirmed that table is free.",
+
+      "execution_mode": "interactive",
+      "timeout_seconds": 30,
+
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "table_number": { "type": "string", "description": "The table number from check_tables" },
+          "guest_name": { "type": "string" },
+          "guest_phone": { "type": "string" },
+          "party_size": { "type": "integer", "description": "Number of guests" },
+          "reservation_datetime": { "type": "string", "description": "The time from check_tables" }
+        },
+        "required": ["table_number", "guest_name", "guest_phone", "party_size", "reservation_datetime"]
+      },
+
+      "http": {
+        "url": "${CALLDESK_TOOL_BASE}/book_table",
+        "http_method": "POST"
+      }
+    }
+  ]
+}
