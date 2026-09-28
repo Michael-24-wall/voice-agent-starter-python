@@ -4,3 +4,10 @@ agents/*.env
 
 # CallDesk accounts, call logs, and Twilio tokens. Local state, never shared.
 data/
+
+# Build and test leftovers.
+__pycache__/
+*.pyc
+
+# curl cookie jars from testing the auth flow hold a live session token.
+cookies.txt

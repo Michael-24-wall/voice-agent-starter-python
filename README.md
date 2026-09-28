@@ -16,6 +16,117 @@ Each file in [agents/](agents/) is the request body for `POST /v1/agents`. The s
 
 There is a [JS version of this repo](https://github.com/AssemblyAI/voice-agent-starter-js) with the same agents and the same steps.
 
+---
+
+# CallDesk
+
+CallDesk is a voice AI receptionist for local service businesses. It answers calls when you can't, collects caller details, and notifies you.
+
+It is the AssemblyAI starter below plus a multi-tenant SaaS layer: businesses sign up, connect their own Twilio account through Twilio Connect, bind their own numbers, and see their own call logs. Python 3.9 or later, standard library only, so there is nothing to pip install.
+
+## How it works
+
+```
+Caller  ->  Twilio  ->  AssemblyAI Voice Agent  ->  send_summary tool
+                                                       |
+                             owner notification  <-  CallDesk server
+```
+
+1. A call comes in on a number the business owns.
+2. Twilio routes it to the AssemblyAI Voice Agent. Depending on the answering mode, it either goes straight in, or rings the owner's mobile first and falls back after 20 seconds.
+3. The agent talks to the caller, then calls the `send_summary` tool with their name, callback number, problem, and urgency.
+4. `send_summary` is an HTTP tool, so AssemblyAI itself makes the request to `POST /tool/send_summary`. That is why it works on a phone call, where there is no browser.
+5. CallDesk files the call against the owning account and shows it on that account's dashboard.
+
+The agent's behaviour is entirely in [agents/calldesk.jsonc](agents/calldesk.jsonc). Runtime is in [deployment/browser/server.py](deployment/browser/server.py). Twilio and AssemblyAI calls are in [twilio_connect.py](twilio_connect.py). Shared plumbing is in [lib.py](lib.py).
+
+## Multi-tenant SaaS
+
+- **Users sign up and connect their own Twilio account** through [Twilio Connect](https://www.twilio.com/docs/connect), so CallDesk never stores their Twilio password.
+- **Each user binds their own numbers.** `POST /v1/phone-numbers/import` registers a number with AssemblyAI, then `PUT /v1/phone-numbers/{number}/agent` attaches the agent to it.
+- **Each user sees only their own calls.** Every `send_summary` call is filed against the account that owns the receiving number, and the dashboard and call log are scoped to that account.
+- **Twilio bills the customer directly** for their own number and for call usage. CallDesk is an application on top of it and never touches telecom billing.
+
+Storage is SQLite at `data/calldesk.db` (gitignored): `users`, `sessions`, `twilio_connections`, `phone_numbers`, `calls`. [auth.py](auth.py) does PBKDF2-SHA256 password hashing; session tokens live in the `sessions` table, so a restart does not log anyone out.
+
+## Twilio Connect Setup
+
+One-time setup, in the Twilio Console:
+
+1. Go to **Console -> Settings -> Connect applications** and create a Connect app.
+2. Set its **Authorize URL** to `{CALLDESK_BASE_URL}/connect/twilio/callback`.
+3. Enable the **"Charge account for usage"** permission so the customer is billed for the numbers they use.
+4. Copy the Connect App SID into `.env` as `TWILIO_CONNECT_APP_SID`.
+
+Also in `.env`, for this instance:
+
+```sh
+TWILIO_ACCOUNT_SID=AC...            # yours, from the console dashboard
+TWILIO_AUTH_TOKEN=...              # yours, reads the customer's number list
+CALLDESK_BASE_URL=https://your-app.onrender.com
+AGENT_ID_CALLDESK=agent_...        # written by publish.py
+TWILIO_TRUNK_DOMAIN=...            # the SIP trunk, gates /numbers/bind
+```
+
+`CALLDESK_BASE_URL` must be reachable from Twilio. `localhost` will not do.
+
+## Answering Modes
+
+Per number, under **Numbers -> Configure**.
+
+**Mode A &mdash; CallDesk answers directly.** The number's voice URL points at `/twiml/fallback`, which returns `<Response><Redirect>sip:sip.assemblyai.com</Redirect></Response>`. The call goes into the agent with nobody's phone ringing.
+
+**Mode B &mdash; Ring my mobile first, CallDesk if I don't answer.** The number's voice URL points at a TwiML Bin in the customer's Twilio account:
+
+```xml
+<Response>
+  <Dial timeout="20"><Number>YOUR_MOBILE</Number></Dial>
+  <Redirect method="GET">{CALLDESK_BASE_URL}/twiml/fallback?number=+1555...</Redirect>
+</Response>
+```
+
+So CallDesk is the fallback: 20 seconds for you, then the agent. The bin is created and updated in place, so saving repeatedly does not litter the account.
+
+**Call Back** on the calls page places an outbound call from the bound number. Its URL is `/twiml/outbound`, which also redirects into the agent, so you hear CallDesk rather than a ringing phone.
+
+## Run locally
+
+```sh
+cp .env.example .env      # add ASSEMBLYAI_API_KEY
+python seed.py            # demo account, safe to re-run
+AGENT=calldesk python publish.py
+AGENT=calldesk python deployment/browser/server.py
+```
+
+- <http://localhost:3000> &mdash; the site
+- <http://localhost:3000/talk> &mdash; the voice agent, browser microphone
+
+`send_summary` is an HTTP tool, so its URL must be a public https address AssemblyAI can reach. Put a tunnel URL in `CALLDESK_TOOL_URL` in `.env` and re-run `publish.py` whenever it changes.
+
+## Demo account
+
+| | |
+|---|---|
+| Email | `demo@calldesk.test` |
+| Password | `demo1234` |
+| Business | Demo Plumbing Co. |
+| Mobile | `+15551234567` |
+
+Seeded with a bound number and two sample calls. Re-running `seed.py` leaves the password alone.
+
+## Tech stack
+
+| | |
+|---|---|
+| Runtime | Python 3.9+, standard library only, no dependencies |
+| Database | SQLite via `sqlite3` |
+| Voice | [AssemblyAI Voice Agent API](https://www.assemblyai.com/products/voice-agent-api) |
+| LLM | AssemblyAI LLM Gateway, opt-in through an `llm` block in an agent file |
+| Telephony | [Twilio](https://www.twilio.com) SIP trunks, TwiML Bin, and [Twilio Connect](https://www.twilio.com/docs/connect) |
+| Frontend | Server-rendered HTML from `templates/`, no build step |
+
+---
+
 ## Quickstart
 
 ### 1. Clone

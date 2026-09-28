@@ -1,14 +1,12 @@
-"""Password hashing and cookie sessions. Standard library only.
+"""Password hashing, session cookies, and the session cookie itself.
 
-Sessions live in memory, so restarting the server logs everyone out. That is
-acceptable for a hackathon demo and keeps this to zero dependencies.
+Standard library only. Session tokens are generated here and stored in the
+`sessions` table by db.py, so a server restart does not log anyone out.
 """
 
 import hashlib
 import hmac
 import secrets
-import threading
-import time
 from http.cookies import SimpleCookie
 
 import db
@@ -19,11 +17,7 @@ ITERATIONS = 260_000
 ALGORITHM = "pbkdf2_sha256"
 
 COOKIE_NAME = "calldesk_session"
-SESSION_TTL_SECONDS = 60 * 60 * 12  # 12 hours
-
-# token -> {"user_id": int, "expires": float}
-SESSIONS = {}
-_LOCK = threading.Lock()
+COOKIE_MAX_AGE = db.SESSION_MAX_AGE_DAYS * 24 * 60 * 60
 
 
 # --- passwords -----------------------------------------------------------
@@ -33,10 +27,9 @@ def hash_password(password):
 
     Format: pbkdf2_sha256$ITERATIONS$SALT_HEX$DK_HEX
 
-    The salt is stored alongside the digest, so the whole string is
-    self-contained. A bare unsalted hex digest would be one rainbow table
-    away from cracking every user at once, which is why this is not just
-    `pbkdf2_hmac(...).hex()`.
+    The salt is stored alongside the digest, so the string is self-contained
+    and no per-user column is needed. A bare unsalted hex digest would be one
+    rainbow table from cracking every user at once.
     """
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac(
@@ -67,36 +60,16 @@ def verify_password(password, stored):
 # --- sessions ------------------------------------------------------------
 
 def create_session(user_id):
-    token = secrets.token_urlsafe(32)
-    with _LOCK:
-        SESSIONS[token] = {
-            "user_id": int(user_id),
-            "expires": time.time() + SESSION_TTL_SECONDS,
-        }
-    return token
+    """Mint a token and persist it. Returns the token for the cookie."""
+    return db.create_session(user_id, secrets.token_urlsafe(32))
 
 
 def get_session_user(token):
-    """Return the user row dict for a valid token, else None."""
-    if not token:
-        return None
-
-    now = time.time()
-    with _LOCK:
-        entry = SESSIONS.get(token)
-        if not entry:
-            return None
-        if entry["expires"] < now:
-            SESSIONS.pop(token, None)
-            return None
-    return db.get_user_by_id(entry["user_id"])
+    return db.get_session_user(token)
 
 
 def delete_session(token):
-    if not token:
-        return
-    with _LOCK:
-        SESSIONS.pop(token, None)
+    db.delete_session(token)
 
 
 # --- cookies -------------------------------------------------------------
@@ -114,10 +87,10 @@ def token_from_cookie(header):
     return morsel.value if morsel else None
 
 
-def set_cookie(token, max_age=SESSION_TTL_SECONDS):
+def set_cookie(token):
     """Build a Set-Cookie value. Not Secure: local runs over plain http."""
     return (
-        f"{COOKIE_NAME}={token}; Path=/; Max-Age={max_age}; "
+        f"{COOKIE_NAME}={token}; Path=/; Max-Age={COOKIE_MAX_AGE}; "
         "HttpOnly; SameSite=Lax"
     )
 

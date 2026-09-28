@@ -1,0 +1,54 @@
+<h1>Answering settings</h1>
+<p class="sub">{{PHONE_NUMBER}}</p>
+
+{{ERROR}}
+
+<div class="panel" style="margin-top:20px">
+  <h2 style="margin-top:0">Mode A &mdash; CallDesk answers directly</h2>
+  <p class="muted">
+    Every inbound call goes straight into the CallDesk voice agent. Nobody's
+    phone rings. Best for a business that wants the agent to take the first
+    call and then hand off.
+  </p>
+  <div class="row" style="margin-top:12px">
+    <span class="pill {{MODE_A_PILL}}">Mode A</span>
+    <span class="muted mono">voice URL &rarr; /twiml/fallback &rarr; sip:sip.assemblyai.com</span>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:16px">
+  <h2 style="margin-top:0">Mode B &mdash; Ring my mobile first, CallDesk if I don't answer</h2>
+  <p class="muted">
+    CallDesk becomes the fallback. Twilio dials your mobile for 20 seconds; if
+    you don't pick up, the call redirects into the voice agent. Your number
+    points at a TwiML Bin that does both.
+  </p>
+  <div class="row" style="margin-top:12px">
+    <span class="pill {{MODE_B_PILL}}">Mode B</span>
+    <span class="muted mono">20s Dial &rarr; /twiml/fallback &rarr; sip:sip.assemblyai.com</span>
+  </div>
+</div>
+
+<h2>Save</h2>
+<form method="post" action="/settings/answering" class="panel">
+  <input type="hidden" name="phone_number" value="{{PHONE_NUMBER}}">
+  <div class="field">
+    <label for="answering_mode">Answering mode</label>
+    <select id="answering_mode" name="answering_mode" style="width:100%;padding:10px 12px;border-radius:7px;border:1px solid var(--border-strong);background:var(--panel-alt);color:var(--text);font-size:15px">
+      <option value="agent" {{SEL_AGENT}}>Mode A &mdash; CallDesk answers directly</option>
+      <option value="human_first" {{SEL_HUMAN}}>Mode B &mdash; Ring my mobile first</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="forward_to">Mobile to ring in Mode B</label>
+    <input type="tel" id="forward_to" name="forward_to" placeholder="+15551234567"
+           value="{{FORWARD_TO}}">
+    <p class="muted" style="font-size:13px;margin-top:6px">
+      Only used in Mode B. Falls back to the mobile on your account if you leave it blank.
+    </p>
+  </div>
+  <div class="row">
+    <button class="btn primary" type="submit">Save answering mode</button>
+    <a class="btn" href="/numbers">Back to numbers</a>
+  </div>
+</form>
