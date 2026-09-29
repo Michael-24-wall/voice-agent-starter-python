@@ -141,35 +141,12 @@ CONNECT_NOT_CONFIGURED = (
 )
 
 
-GOOGLE_MARK = (
-    '<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">'
-    '<path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C36.1 2.6 30.5.5 24 .5'
-    ' 14.6.5 6.5 5.9 2.6 13.8l7.8 6c1.9-5.6 7-9.3 13.6-9.3z"/>'
-    '<path fill="#4285F4" d="M46.98 24.55c0-1.6-.15-3.15-.42-4.65H24v8.8h12.94'
-    'c-.58 2.9-2.26 5.36-4.82 7.01l7.73 6c4.51-4.17 7.13-10.32 7.13-17.16z"/>'
-    '<path fill="#FBBC05" d="M10.38 28.2A14.5 14.5 0 0 1 9.6 24c0-1.5.26-2.9.78-4.2l-7.8-6'
-    'C.87 17.2 0 20.4 0 24c0 3.6.87 6.8 2.56 9.8z"/>'
-    '<path fill="#34A853" d="M24 47.5c6.2 0 11.5-2 15.4-5.6l-7.7-6c-2.1 1.4-4.8 2.3-7.7 2.3'
-    '-6.6 0-12.2-4.4-14.2-10.4l-7.8 6C6.5 42.1 14.6 47.5 24 47.5z"/>'
-    "</svg>"
-)
-
-
-def google_hint():
-    """Shown under the Google button when the OAuth client is not configured,
-    so the button never leads to a dead end."""
-    if google_auth.configured():
-        return ""
-    return note(
-        "Google sign-in is not set up yet. Add GOOGLE_CLIENT_ID and "
-        "GOOGLE_CLIENT_SECRET to .env to enable it.", "warn")
 
 
 def google_login_page(message=""):
     """The login page, carrying a Google failure back to the customer."""
     return page("login.html", "Log in", nav_for(None),
-                ERROR=error_box(message) if message else "",
-                GOOGLE_MARK=GOOGLE_MARK, GOOGLE_HINT=google_hint())
+                ERROR=error_box(message) if message else "")
 
 
 def urgency_class(value) -> str:
@@ -1020,9 +997,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._redirect("/dashboard")
                 return
             self._html(page("login.html", "Log in", nav_for(None),
-                            EMAIL=self._one("email"),
-                            GOOGLE_MARK=GOOGLE_MARK,
-                            GOOGLE_HINT=google_hint()))
+                            EMAIL=self._one("email")))
             return
 
         if path == "/signup":
@@ -1033,8 +1008,6 @@ class Handler(BaseHTTPRequestHandler):
                             EMAIL=self._one("email"),
                             BUSINESS_NAME=self._one("business_name"),
                             MOBILE_NUMBER=self._one("mobile_number"),
-                            GOOGLE_MARK=GOOGLE_MARK,
-                            GOOGLE_HINT=google_hint(),
                             **type_options(self._one("business_type"))))
             return
 
