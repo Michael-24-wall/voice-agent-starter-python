@@ -221,14 +221,7 @@ async function start() {
   setStatus('connecting')
 
   try {
-    // The API key never reaches the page; this token expires in 60 seconds.
-    const res = await fetch('/token')
-    if (!res.ok) {
-      setStatus('error', 'could not mint a token, check the API key')
-      reset()
-      return
-    }
-    const { token } = await res.json()
+    // Token is fetched later, right before connecting — it expires in 60s.
 
     // Two contexts, created in the click handler so Safari starts them.
     captureCtx = new AudioContext({ sampleRate: WIRE_RATE })
@@ -252,6 +245,16 @@ async function start() {
     listMics()
     const capture = await addWorklet(captureCtx, CAPTURE_WORKLET, 'capture')
     captureCtx.createMediaStreamSource(mic).connect(capture)
+
+    // Fetch a fresh token right before connecting. Tokens expire in 60
+    // seconds, and the mic permission prompt above can take that long.
+    const res = await fetch('/token')
+    if (!res.ok) {
+      setStatus('error', 'could not mint a token, check the API key')
+      reset()
+      return
+    }
+    const { token } = await res.json()
 
     const url = new URL('wss://agents.assemblyai.com/v1/ws')
     url.searchParams.set('token', token)
@@ -369,7 +372,11 @@ async function start() {
       }
     }
 
-    ws.onclose = () => { setStatus('idle'); reset() }
+    ws.onclose = (e) => {
+      console.log('WebSocket closed:', e.code, e.reason)
+      setStatus('idle')
+      reset()
+    }
     ws.onerror = () => { setStatus('error', 'connection failed'); reset() }
   } catch (error) {
     setStatus('error', error.message)
