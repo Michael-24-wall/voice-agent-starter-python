@@ -62,7 +62,7 @@
       // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/http-tools
       "http": {
         "url": "${CALLDESK_TOOL_URL}",
-        "http_method": "POST"
+        "method": "POST"
       }
     }
   ]

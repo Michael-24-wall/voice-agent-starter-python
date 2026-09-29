@@ -63,7 +63,7 @@
       // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/http-tools
       "http": {
         "url": "${CALLDESK_TOOL_BASE}/check_availability",
-        "http_method": "POST"
+        "method": "POST"
       }
     },
     {
@@ -87,7 +87,7 @@
 
       "http": {
         "url": "${CALLDESK_TOOL_BASE}/book_room",
-        "http_method": "POST"
+        "method": "POST"
       }
     }
   ]
