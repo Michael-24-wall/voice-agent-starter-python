@@ -802,3 +802,12 @@ body.no-side #side { display: none; }
 @media (max-width: 720px) {
   .guide-cta, .onboard-done { flex-direction: column; align-items: flex-start; }
 }
+
+.preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.preview-grid p { white-space: pre-wrap; }
+.settings-section { padding: 4px 0 22px; margin-bottom: 22px; border-bottom: 1px solid var(--border-soft); }
+.settings-section h2 { margin: 0 0 14px; font-size: 17px; }
+.reminder-card .card-title { margin-bottom: 6px; }
+@media (max-width: 720px) {
+  .preview-grid { grid-template-columns: 1fr; }
+}

@@ -19,8 +19,10 @@ import json
 import os
 import re
 import sys
+import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -32,9 +34,11 @@ import agent_manager  # noqa: E402
 import auth  # noqa: E402
 import db  # noqa: E402
 import google_auth  # noqa: E402
+import email_sender  # noqa: E402
+import reminders  # noqa: E402
 import twilio_connect as tc  # noqa: E402
 from lib import (ApiError, aai, load_env, publish_agent, read_agent,  # noqa: E402
-                 required, stored_agent_id)
+                 required, stored_agent_id, twilio)
 
 TEMPLATES = ROOT / "templates"
 STATIC = HERE / "static"
@@ -91,7 +95,7 @@ _SLOT = re.compile(r"\{\{([A-Z_]+)\}\}")
 RAW = {"CONTENT", "NAV", "NUMBERS", "AVAILABLE", "RECENT_CALLS", "CALLS",
        "TWILIO_BANNER", "ERROR", "PAGER", "ROOMS", "BOOKINGS", "DEPARTMENTS",
     "DEPARTMENT_OPTIONS", "SLOT_NOTICE", "SLOTS", "APPOINTMENTS", "TABLES", "RESERVATIONS", "COUNTS",
-       "AGENT_BANNER", "VERTICAL", "CHECKLIST", "GUIDE_HINT"}
+    "AGENT_BANNER", "VERTICAL", "CHECKLIST", "GUIDE_HINT", "REMINDERS"}
 
 # A one-shot message for the toast on the next page. base.html reads the cookie,
 # shows it, and clears it, so it never survives to a second page.
@@ -128,7 +132,7 @@ def page(name: str, title: str, nav: str, **values) -> bytes:
 
 # --- view fragments ------------------------------------------------------
 
-URGENCIES = ("high", "medium", "low")
+URGENCIES = ("emergency", "high", "medium", "low")
 CONNECT_NOT_CONFIGURED = (
     "Twilio Connect not configured. To enable phone integration, an admin "
     "must create a Twilio Connect App (requires an upgraded Twilio account) "
@@ -242,7 +246,7 @@ def nav_for(user) -> str:
         '<a href="/numbers">Numbers</a>'
         '<a href="/calls">Calls</a>'
         '<a href="/guide">Guide</a>'
-        '<a href="/settings/answering">Settings</a>'
+        '<a href="/settings/reminders">Settings</a>'
         "</nav>"
         '<div class="header-right">'
         '<a class="btn btn-ghost btn-sm" href="/talk" target="_blank" rel="noopener">'
@@ -259,7 +263,7 @@ def nav_for(user) -> str:
         "</div>"
         '<a href="/dashboard" role="menuitem">Dashboard</a>'
         '<a href="/numbers" role="menuitem">Numbers</a>'
-        '<a href="/settings/answering" role="menuitem">Settings</a>'
+        '<a href="/settings/reminders" role="menuitem">Settings</a>'
         '<form method="post" action="/logout">'
         '<button class="danger" type="submit" role="menuitem">Log out</button>'
         "</form>"
@@ -357,37 +361,61 @@ def booking_rows(bookings):
 def department_rows(departments):
     if not departments:
         return empty_state("&#128736;", "No departments yet",
-                           "Add a department, then add appointment slots to it.")
+                           "Add a department and its operating schedule.")
     rows = [
         _row([
-            f"<strong>{esc(d['name'])}</strong>",
-            esc(d["description"] or ""),
+            f"<strong>{esc(d['name'])}</strong><br><span class=\"muted\">{esc(d['description'] or '')}</span>",
+            f"{esc(d['opening_time'])} to {esc(d['closing_time'])}<br>"
+            f"{esc(d['slot_duration_minutes'])} min, {esc(d['daily_capacity'])} patients/day",
+            esc(d['default_doctor'] or "Any doctor"),
+            _schedule_form(d),
         ])
         for d in departments
     ]
     return ('<div class="table-wrap"><table><thead><tr>'
-            "<th>Department</th><th>Notes</th></tr></thead><tbody>"
+            "<th>Department</th><th>Schedule</th><th>Doctor</th><th>Update</th></tr></thead><tbody>"
             + "".join(rows) + "</tbody></table></div>")
 
 
-def slot_rows(slots):
-    if not slots:
-        return empty_state("&#128197;", "No slots yet",
-                           "Add appointment times, and the agent can offer them on a call.")
-    rows = [
-        _row([
-            esc(s.get("department") or ""),
-            esc(s.get("doctor_name") or ""),
-            esc(s.get("slot_datetime") or ""),
-            esc(f"{s.get('duration_minutes') or 30} min"),
-            status_badge(s.get("status") or "available"),
-            _delete_form("/setup/hospital/slots/delete", s["id"], "Delete"),
-        ])
-        for s in slots
-    ]
-    return ('<div class="table-wrap"><table><thead><tr>'
-            "<th>Department</th><th>Doctor</th><th>When</th><th>Length</th>"
-            "<th>Status</th><th></th></tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+def _schedule_form(department):
+    days = set((department.get("working_days") or "").split(","))
+    checks = "".join(
+        f'<label class="check-inline"><input type="checkbox" name="working_days" '
+        f'value="{day}" {"checked" if day in days else ""}>{label}</label>'
+        for day, label in (("mon", "Mon"), ("tue", "Tue"), ("wed", "Wed"),
+                           ("thu", "Thu"), ("fri", "Fri"), ("sat", "Sat"),
+                           ("sun", "Sun")))
+    return (
+        f'<form method="post" action="/setup/hospital/departments/update" class="schedule-form">'
+        f'<input type="hidden" name="id" value="{int(department["id"])}">'
+        f'<div class="checks">{checks}</div>'
+        f'<input name="opening_time" type="time" value="{esc(department["opening_time"])}" required>'
+        f'<input name="closing_time" type="time" value="{esc(department["closing_time"])}" required>'
+        f'<input name="slot_duration_minutes" type="number" min="1" value="{int(department["slot_duration_minutes"])}" required>'
+        f'<input name="daily_capacity" type="number" min="1" value="{int(department["daily_capacity"])}" required>'
+        f'<input name="default_doctor" type="text" value="{esc(department["default_doctor"] or "")}" placeholder="Default doctor">'
+        '<output class="schedule-preview">Schedule preview updates as you edit.</output>'
+        '<button class="btn btn-secondary btn-sm" type="submit">Save schedule</button></form>'
+    )
+
+
+def hospital_capacity_rows(user_id):
+    departments = db.list_departments(user_id)
+    rows = []
+    today = datetime.now(timezone.utc).date()
+    for offset in range(7):
+        date = (today + timedelta(days=offset)).strftime("%Y-%m-%d")
+        for department in departments:
+            if not db._generated_slots(department, date):
+                continue
+            booked = db.department_daily_count(user_id, department["id"], date)
+            rows.append(_row([esc(date), esc(department["name"]),
+                              esc(f"{booked} / {department['daily_capacity']}")]))
+    if not rows:
+        return '<p class="muted">No operating days configured in the next week.</p>'
+    return ('<div class="table-wrap"><table><thead><tr><th>Date</th><th>Department</th>'
+            '<th>Booked</th></tr></thead><tbody>' + ''.join(rows) +
+            '</tbody></table></div>')
 
 
 def appointment_rows(appointments):
@@ -400,13 +428,32 @@ def appointment_rows(appointments):
             esc(a.get("department") or ""),
             esc(a.get("doctor_name") or ""),
             esc(a.get("slot_datetime") or ""),
+            esc(a.get("patient_phone") or ""),
+            esc(a.get("reason") or ""),
+            badge("Emergency", "danger") if a.get("urgency") == "emergency" else badge("Routine", "neutral"),
+            badge("SMS sent", "success") if a.get("reminder_sent") else badge("SMS pending", "warning"),
+            '<span class="muted">No email</span>' if not a.get("patient_email") else
+            (badge("Email sent", "success") if a.get("email_reminder_sent") else badge("Email pending", "warning")),
             status_badge(a.get("status") or "confirmed"),
+            _confirmation_form(a),
         ])
         for a in appointments
     ]
     return ('<div class="table-wrap"><table><thead><tr>'
             "<th>Patient</th><th>Department</th><th>Doctor</th><th>When</th>"
-            "<th>Status</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+            "<th>Phone</th><th>Reason</th><th>Urgency</th><th>SMS</th><th>Email</th><th>Status</th><th></th>"
+            "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+
+
+def _confirmation_form(appointment):
+    if not appointment.get("patient_email"):
+        return '<span class="muted">No email</span>'
+    return (
+        '<form method="post" action="/appointments/resend-confirmation" class="inline-form">'
+        f'<input type="hidden" name="appointment_id" value="{int(appointment["id"])}">'
+        '<button class="btn btn-secondary btn-sm" type="submit">Resend confirmation</button>'
+        '</form>'
+    )
 
 
 def table_rows(tables):
@@ -474,11 +521,12 @@ def vertical_summary(user) -> str:
                 + booking_rows(db.list_bookings(uid)))
         link = '<a class="btn btn-primary btn-sm" href="/setup/hotel/rooms">Manage rooms</a>'
     elif vertical == "hospital":
-        stats = [("Departments", "departments"), ("Open slots", "slots_available"),
-                 ("Appointments", "appointments")]
-        body = (f'<h2 class="section-title">Recent appointments</h2>'
-                + appointment_rows(db.list_appointments(uid)))
-        link = '<a class="btn btn-primary btn-sm" href="/setup/hospital/slots">Manage slots</a>'
+        stats = [("Departments", "departments"), ("Appointments", "appointments")]
+        body = (f'<h2 class="section-title">Booked counts</h2>'
+            + hospital_capacity_rows(uid)
+            + f'<h2 class="section-title">Upcoming appointments</h2>'
+            + appointment_rows(db.list_appointments(uid)))
+        link = '<a class="btn btn-primary btn-sm" href="/setup/hospital">Manage schedules</a>'
     elif vertical == "restaurant":
         stats = [("Tables", "tables"), ("Reservations", "reservations")]
         body = (f'<h2 class="section-title">Recent reservations</h2>'
@@ -520,7 +568,7 @@ def badge(text, kind):
     return f'<span class="badge badge-{kind}">{esc(text)}</span>'
 
 
-URGENCY_BADGE = {"high": "danger", "medium": "warning", "low": "neutral"}
+URGENCY_BADGE = {"emergency": "danger", "high": "danger", "medium": "warning", "low": "neutral"}
 
 # Status words the vertical tables carry, mapped to badge colours. Anything
 # unlisted shows as neutral rather than guessing.
@@ -727,6 +775,35 @@ def twilio_banner(user, message="", kind="warn"):
     )
 
 
+def reminder_card(user):
+    settings = db.get_reminder_settings(user["id"])
+    sms = badge("Enabled", "success") if settings["enabled"] else badge("Disabled", "neutral")
+    email = badge("Enabled", "success") if settings["email_enabled"] else badge("Disabled", "neutral")
+    return (
+        '<div class="card reminder-card"><div class="row-between">'
+        '<div><div class="card-title">Appointment reminders</div>'
+        f'<p class="muted">SMS: {sms} &nbsp; Email: {email} &nbsp; '
+        f'Hours before: {int(settings["hours_before"])}</p>'
+        f'<p class="muted">Sent this week: {db.reminders_sent_this_week(user["id"])} total</p></div>'
+        '<a class="btn btn-secondary btn-sm" href="/settings/reminders">Edit settings</a>'
+        '</div></div>'
+    )
+
+
+def _reminder_preview(template, user, appointment=None):
+    appointment = appointment or {"patient_name": "Michael", "patient_phone": "0700000000",
+                                  "slot_datetime": "2026-10-03 09:00", "department": "Cardiology"}
+    slot = str(appointment["slot_datetime"])
+    date, _, time = slot.partition(" ")
+    values = {"business_name": user["business_name"], "patient_name": appointment["patient_name"],
+              "patient_phone": appointment["patient_phone"], "date": date, "time": time,
+              "department": appointment["department"]}
+    text = str(template or "")
+    for key, value in values.items():
+        text = text.replace("{" + key + "}", str(value))
+    return text
+
+
 def setup_checklist(user) -> str:
     """How far through setup this account is. Empty once all five are done.
 
@@ -768,12 +845,12 @@ PAGE = ""
 
 # Routes a browser only ever GETs, and so have no POST handler. Used to answer
 # a stray POST with 405 instead of a misleading 404. /signup, /login, /logout,
-# /numbers/bind, /settings/answering, /calls/callback and /tool/send_summary
+# /numbers/bind, /settings/answering, /settings/reminders, /calls/callback and /tool/send_summary
 # are deliberately absent: they are real POST routes.
 GET_ONLY = {"/", "/dashboard", "/numbers", "/calls", "/talk", "/guide",
             "/setup", "/setup/hospital", "/setup/hotel/rooms",
-            "/setup/hospital/departments", "/setup/hospital/slots",
-            "/setup/restaurant/tables",
+            "/setup/hospital/departments",
+            "/setup/restaurant/tables", "/settings/reminders",
             "/connect/twilio", "/connect/twilio/callback",
             "/auth/google", "/auth/google/callback",
             "/twiml/fallback", "/twiml/outbound", "/app.js",
@@ -866,7 +943,7 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
         parsed = urllib.parse.parse_qs(raw.decode("utf-8", "replace"))
-        return {k: v[0] for k, v in parsed.items()}
+        return {k: v if k == "working_days" else v[0] for k, v in parsed.items()}
 
     def _query(self):
         return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -981,7 +1058,7 @@ class Handler(BaseHTTPRequestHandler):
         # Every setup page. /setup picks the one this account's vertical uses;
         # the others are the same page reached by an explicit sub-path.
         if path in ("/setup", "/setup/hospital", "/setup/hotel/rooms", "/setup/hospital/departments",
-                    "/setup/hospital/slots", "/setup/restaurant/tables"):
+                    "/setup/restaurant/tables"):
             setup_user = self._require_user()
             if not setup_user:
                 return
@@ -992,6 +1069,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/settings/answering":
             self._answering_form()
+            return
+        if path == "/settings/reminders":
+            self._reminder_settings_page()
             return
         if path == "/calls":
             self._calls()
@@ -1092,6 +1172,7 @@ class Handler(BaseHTTPRequestHandler):
             BUSINESS_NAME=user["business_name"], EMAIL=user["email"],
             BUSINESS_TYPE_LABEL=db.BUSINESS_TYPE_LABELS[vertical_of(user)],
             TWILIO_BANNER=twilio_banner(user, message, kind),
+            REMINDERS=reminder_card(user),
             NUMBERS=numbers_table(user["id"]),
             RECENT_CALLS=calls_table(user["id"], limit=10),
             CALLS_TODAY=db.count_calls(user["id"], since=utc_day()),
@@ -1161,6 +1242,46 @@ class Handler(BaseHTTPRequestHandler):
             MODE_B_PILL="warning" if mode == "human_first" else "neutral",
             ERROR=error_box(self._one("error")),
         ))
+
+    def _reminder_settings_page(self) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        settings = db.get_reminder_settings(user["id"])
+        email_subject = settings["email_subject_template"]
+        email_body = settings["email_body_template"]
+        self._html(page(
+            "reminders.html", "Appointment reminders", nav_for(user),
+            ERROR=error_box(self._one("error")),
+            SMS_ENABLED="checked" if settings["enabled"] else "",
+            EMAIL_ENABLED="checked" if settings["email_enabled"] else "",
+            HOURS_BEFORE=settings["hours_before"],
+            SMS_TEMPLATE=settings["sms_message_template"],
+            EMAIL_SUBJECT=email_subject,
+            EMAIL_BODY=email_body,
+            SMS_PREVIEW=_reminder_preview(settings["sms_message_template"], user),
+            EMAIL_PREVIEW_SUBJECT=_reminder_preview(email_subject, user),
+            EMAIL_PREVIEW_BODY=_reminder_preview(email_body, user),
+        ))
+
+    def _save_reminder_settings(self, form) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        try:
+            hours = max(0, int(form.get("hours_before") or 24))
+            db.update_reminder_settings(user["id"], {
+                "enabled": "enabled" in form,
+                "hours_before": hours,
+                "sms_message_template": form.get("sms_message_template"),
+                "email_enabled": "email_enabled" in form,
+                "email_subject_template": form.get("email_subject_template"),
+                "email_body_template": form.get("email_body_template"),
+            })
+        except (TypeError, ValueError) as err:
+            self._redirect("/settings/reminders?error=" + urllib.parse.quote(str(err)))
+            return
+        self._redirect("/settings/reminders", flash="Reminder settings saved.")
 
     def _calls(self) -> None:
         user = self._require_user()
@@ -1245,6 +1366,8 @@ class Handler(BaseHTTPRequestHandler):
             "/tool/book_room": self._tool_book_room,
             "/tool/check_slots": self._tool_check_slots,
             "/tool/book_appointment": self._tool_book_appointment,
+            "/tool/triage_symptoms": self._tool_triage_symptoms,
+            "/tool/end_call": self._tool_end_call,
             "/tool/check_tables": self._tool_check_tables,
             "/tool/book_table": self._tool_book_table,
         }
@@ -1259,8 +1382,7 @@ class Handler(BaseHTTPRequestHandler):
             "/setup/hotel/rooms": self._add_room,
             "/setup/hotel/rooms/delete": self._delete_room,
             "/setup/hospital/departments": self._add_department,
-            "/setup/hospital/slots": self._add_slot,
-            "/setup/hospital/slots/delete": self._delete_slot,
+            "/setup/hospital/departments/update": self._update_department,
             "/setup/restaurant/tables": self._add_table,
             "/setup/restaurant/tables/delete": self._delete_table,
         }
@@ -1294,8 +1416,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/settings/answering":
             self._save_answering(form)
             return
+        if path == "/settings/reminders":
+            self._save_reminder_settings(form)
+            return
         if path == "/calls/callback":
             self._call_back(form)
+            return
+        if path == "/appointments/resend-confirmation":
+            self._resend_confirmation(form)
             return
 
         if path == "/setup/publish-agent":
@@ -1303,6 +1431,25 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._send(404, b'{"error":"not found"}', "application/json")
+
+    def _resend_confirmation(self, form) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        appointment = db.get_hospital_appointment(form.get("appointment_id"), user["id"])
+        if not appointment:
+            self._redirect("/dashboard?error=That+appointment+was+not+found.")
+            return
+        try:
+            sent = email_sender.send_confirmation_email_for_appointment(
+                appointment["id"], force=True)
+        except Exception as err:
+            self._redirect("/dashboard?error=" + urllib.parse.quote(str(err)[:200]))
+            return
+        if not sent:
+            self._redirect("/dashboard?error=That+appointment+has+no+email+address.")
+            return
+        self._redirect("/dashboard", flash="Confirmation email sent.")
 
     # --- POST handlers --------------------------------------------------
 
@@ -1671,25 +1818,73 @@ class Handler(BaseHTTPRequestHandler):
     def _tool_check_slots(self) -> None:
         def work(args, user):
             print(f"check_slots {json.dumps(args, sort_keys=True)}", flush=True)
-            slots = db.find_available_slots(
-                user["id"], args.get("department"), args.get("date"))
-            result = {"slots": [
-                {"slot_id": s["id"], "doctor": s["doctor_name"] or "",
+            department = args.get("department")
+            requested_date = args.get("date")
+            dept, requested, target = db.schedule_info(user["id"], department, requested_date)
+            result = {"slots": [], "date": target, "next_available": target}
+            if requested_date and target != requested:
+                result["message"] = f"That date is not an operating day. The next available day is {target}."
+            count = db.department_daily_count(user["id"], dept["id"], target)
+            if count >= int(dept["daily_capacity"] or 16):
+                result["message"] = "Department is fully booked on that date."
+                result["next_available"] = db.next_available_date(user["id"], department, target)
+                print(f"check_slots result {json.dumps(result, sort_keys=True)}", flush=True)
+                return result
+            slots = db.find_available_slots(user["id"], department, requested_date)
+            result["slots"] = [
+                {"doctor": s["doctor_name"] or "",
                  "datetime": s["slot_datetime"],
-                 "duration": s["duration_minutes"]}
+                 "duration_minutes": s["duration_minutes"]}
                 for s in slots
-            ]}
+            ]
+            if not slots:
+                result["next_available"] = db.next_available_date(user["id"], department, target)
             print(f"check_slots result {json.dumps(result, sort_keys=True)}", flush=True)
             return result
         self._tool_run("hospital", work)
 
     def _tool_book_appointment(self) -> None:
         def work(args, user):
-            return db.book_appointment(
-                user["id"], args.get("department"), args.get("doctor_name"),
-                args.get("patient_name"), args.get("patient_phone"),
-                args.get("slot_datetime"), args.get("reason"))
+            result = db.book_appointment(
+                user["id"], args.get("department"), args.get("slot_datetime"),
+                args.get("patient_name"), args.get("patient_phone"), args.get("reason"),
+                patient_email=args.get("patient_email"))
+            try:
+                email_sender.send_confirmation_email_for_appointment(result["appointment_id"])
+            except Exception as err:
+                print(f"Confirmation email failed: {err}", flush=True)
+            return result
         self._tool_run("hospital", work)
+
+    def _tool_triage_symptoms(self) -> None:
+        def work(args, user):
+            symptoms = (args.get("symptoms") or "").strip()
+            emergency_words = (
+                "chest pain", "can't breathe", "cannot breathe", "severe bleeding",
+                "stroke", "suicidal", "overdose", "severe allergic reaction",
+            )
+            emergency = any(word in symptoms.lower() for word in emergency_words)
+            if emergency:
+                db.log_call(user["id"], "Emergency triage", "", symptoms, "emergency")
+                return {"risk": "emergency",
+                        "message": "Tell the caller to hang up and call 911 immediately."}
+            return {"risk": "routine"}
+        self._tool_run("hospital", work)
+
+    def _tool_end_call(self) -> None:
+        args = self._tool_args()
+        if args is None:
+            return
+        user = self._tool_user(args, "hospital")
+        if user is None:
+            return
+        reason = args.get("reason", "completed")
+        print(f"end_call reason={reason}", flush=True)
+        try:
+            email_sender.send_confirmation_email_for_latest_appointment(user["id"])
+        except Exception as err:
+            print(f"Confirmation email failed: {err}", flush=True)
+        self._tool_ok({"message": "Goodbye"})
 
     # restaurant
 
@@ -1748,22 +1943,13 @@ class Handler(BaseHTTPRequestHandler):
                 BOOKINGS=booking_rows(db.list_bookings(user["id"])),
             )
         elif vertical == "hospital":
-            title = "Departments and slots"
+            title = "Departments and schedules"
             departments = db.list_departments(user["id"])
-            values["DEPARTMENT_OPTIONS"] = "".join(
-                f'<option value="{int(d["id"])}">{esc(d["name"])}</option>'
-                for d in departments)
-            values["SLOT_NOTICE"] = (note(
-                "Add a department first before creating appointment slots.", "warn")
-                if not departments else "")
-            values["SLOT_BUTTON_DISABLED"] = "disabled" if not departments else ""
             values.update(
                 COUNTS=counts_markup(db.business_counts(user["id"]),
                                      [("Departments", "departments"),
-                                      ("Open slots", "slots_available"),
                                       ("Appointments", "appointments")]),
                 DEPARTMENTS=department_rows(departments),
-                SLOTS=slot_rows(db.list_slots(user["id"], limit=100)),
                 APPOINTMENTS=appointment_rows(db.list_appointments(user["id"])),
             )
         elif vertical == "restaurant":
@@ -1853,36 +2039,19 @@ class Handler(BaseHTTPRequestHandler):
         if not name:
             self._setup_back("Give the department a name.", "err", "/setup/hospital")
             return
-        db.add_department(user["id"], name, form.get("description"))
+        try:
+            db.add_department(
+                user["id"], name, form.get("description"), form.get("opening_time"),
+                form.get("closing_time"), form.get("slot_duration_minutes"),
+                form.get("working_days"), form.get("daily_capacity"),
+                form.get("default_doctor"),
+            )
+        except (ValueError, TypeError) as err:
+            self._setup_back(str(err), "err", "/setup/hospital")
+            return
         self._setup_back(f"Department {name} added.", path="/setup/hospital")
 
-    def _add_slot(self, form) -> None:
-        user = self._require_user()
-        if not user:
-            return
-        if vertical_of(user) != "hospital":
-            self._setup_back("That is a hospital setup page.", "err")
-            return
-        department = (form.get("department_id") or "").strip()
-        when = (form.get("slot_datetime") or "").strip()
-        if not (department and when):
-            self._setup_back("Pick a department and a time for the slot.", "err",
-                             "/setup/hospital")
-            return
-        if not any(str(d["id"]) == department for d in db.list_departments(user["id"])):
-            self._setup_back("That department is not on your list.", "err",
-                             "/setup/hospital")
-            return
-        try:
-            minutes = int(form.get("duration_minutes") or 30)
-        except ValueError:
-            self._setup_back("Length has to be a number of minutes.", "err",
-                             "/setup/hospital")
-            return
-        db.add_slot(user["id"], department, form.get("doctor_name"), when, minutes)
-        self._setup_back("Appointment slot added.", path="/setup/hospital")
-
-    def _delete_slot(self, form) -> None:
+    def _update_department(self, form) -> None:
         user = self._require_user()
         if not user:
             return
@@ -1890,12 +2059,16 @@ class Handler(BaseHTTPRequestHandler):
             self._setup_back("That is a hospital setup page.", "err")
             return
         try:
-            db.delete_slot(user["id"], form.get("id"))
+            db.update_department_schedule(
+                user["id"], form.get("id"), form.get("opening_time"),
+                form.get("closing_time"), form.get("slot_duration_minutes"),
+                form.get("working_days"), form.get("daily_capacity"),
+                form.get("default_doctor"),
+            )
         except (ValueError, TypeError) as err:
-            self._setup_back(str(err) or "That appointment slot could not be removed.",
-                             "err", "/setup/hospital")
+            self._setup_back(str(err), "err", "/setup/hospital")
             return
-        self._setup_back("Appointment slot removed.", path="/setup/hospital")
+        self._setup_back("Department schedule saved.", path="/setup/hospital")
 
     def _add_table(self, form) -> None:
         user = self._require_user()
@@ -1977,6 +2150,45 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def send_appointment_reminder(appointment: dict) -> bool:
+    account = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+    token = os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
+    sender = os.environ.get("TWILIO_PHONE_NUMBER", "").strip()
+    recipient = (appointment.get("patient_phone") or "").strip()
+    if not (account and token and sender and recipient):
+        print(f"reminder skipped for appointment {appointment['id']}: Twilio SMS is not configured",
+              flush=True)
+        return False
+    url = (f"https://api.twilio.com/2010-04-01/Accounts/"
+           f"{urllib.parse.quote(account, safe='')}/Messages.json")
+    body = (f"Reminder: your appointment is scheduled for "
+            f"{appointment['slot_datetime']} at {appointment['business_name']}.")
+    try:
+        twilio(url, form={"To": recipient, "From": sender, "Body": body},
+               account=account, token=token)
+    except (ApiError, OSError) as err:
+        print(f"reminder failed for appointment {appointment['id']}: {err}", flush=True)
+        return False
+    print(f"reminder sent for appointment {appointment['id']} to {recipient}", flush=True)
+    return True
+
+
+def run_appointment_reminders() -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for appointment in db.due_hospital_reminders(now):
+        if send_appointment_reminder(appointment):
+            db.mark_reminder_sent(appointment["id"])
+
+
+def appointment_reminder_loop() -> None:
+    while True:
+        try:
+            run_appointment_reminders()
+        except Exception as err:  # keep the server alive if one scan fails
+            print(f"reminder scheduler failed: {err!r}", flush=True)
+        threading.Event().wait(300)
+
+
 def main() -> None:
     global AGENT, PAGE
     load_env()
@@ -1984,6 +2196,8 @@ def main() -> None:
 
     db.init_db()
     db.purge_expired_sessions()
+    threading.Thread(target=reminders.reminder_loop,
+                     name="appointment-reminders", daemon=True).start()
 
     AGENT = resolve_agent()
     # Left as the raw template on purpose. Which agent a session gets depends

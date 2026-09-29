@@ -16,7 +16,7 @@
   <div class="row-between" style="margin-bottom:16px">
     <div class="card-title" style="margin:0">Add a department</div>
   </div>
-  <form method="post" action="/setup/hospital/departments">
+  <form method="post" action="/setup/hospital/departments" class="schedule-form">
     <div class="row" style="gap:12px;align-items:flex-end;flex-wrap:wrap">
       <div class="form-field" style="flex:0 0 220px">
         <label for="name">Department</label>
@@ -26,46 +26,66 @@
         <label for="description">Notes</label>
         <input id="description" name="description" type="text" placeholder="Second floor, walk-ins welcome">
       </div>
+      <div class="form-field">
+        <label for="opening_time">Opening</label>
+        <input id="opening_time" name="opening_time" type="time" value="09:00" required>
+      </div>
+      <div class="form-field">
+        <label for="closing_time">Closing</label>
+        <input id="closing_time" name="closing_time" type="time" value="17:00" required>
+      </div>
+      <div class="form-field">
+        <label for="slot_duration_minutes">Minutes per patient</label>
+        <input id="slot_duration_minutes" name="slot_duration_minutes" type="number" min="1" value="30" required>
+      </div>
+      <div class="form-field">
+        <label for="daily_capacity">Max patients/day</label>
+        <input id="daily_capacity" name="daily_capacity" type="number" min="1" value="16" required>
+      </div>
+      <div class="form-field">
+        <label for="default_doctor">Default doctor</label>
+        <input id="default_doctor" name="default_doctor" type="text" placeholder="Dr Ito">
+      </div>
       <button class="btn btn-primary" type="submit">Add department</button>
     </div>
+    <fieldset class="day-picker"><legend>Operating days</legend>
+      <label><input type="checkbox" name="working_days" value="mon" checked> Mon</label>
+      <label><input type="checkbox" name="working_days" value="tue" checked> Tue</label>
+      <label><input type="checkbox" name="working_days" value="wed" checked> Wed</label>
+      <label><input type="checkbox" name="working_days" value="thu" checked> Thu</label>
+      <label><input type="checkbox" name="working_days" value="fri" checked> Fri</label>
+      <label><input type="checkbox" name="working_days" value="sat"> Sat</label>
+      <label><input type="checkbox" name="working_days" value="sun"> Sun</label>
+    </fieldset>
+    <output class="schedule-preview">This department will have 16 slots per day.</output>
   </form>
 </div>
+
+<script>
+  document.querySelectorAll('.schedule-form').forEach(function (form) {
+    const output = form.querySelector('.schedule-preview');
+    const update = function () {
+      const opening = form.querySelector('[name="opening_time"]').value;
+      const closing = form.querySelector('[name="closing_time"]').value;
+      const duration = Number(form.querySelector('[name="slot_duration_minutes"]').value || 30);
+      const capacity = Number(form.querySelector('[name="daily_capacity"]').value || 16);
+      const times = [];
+      const toMinutes = function (value) { const parts = value.split(':'); return Number(parts[0]) * 60 + Number(parts[1]); };
+      if (opening && closing && duration > 0 && toMinutes(closing) > toMinutes(opening)) {
+        for (let minute = toMinutes(opening); minute < toMinutes(closing) && times.length < capacity; minute += duration) {
+          times.push(String(Math.floor(minute / 60)).padStart(2, '0') + ':' + String(minute % 60).padStart(2, '0'));
+        }
+      }
+      output.textContent = 'This department will have ' + times.length + ' slots per day: ' + times.slice(0, 3).join(', ') + (times.length > 3 ? ', ...' : '') + '.';
+    };
+    form.querySelectorAll('input').forEach(function (input) { input.addEventListener('input', update); input.addEventListener('change', update); });
+    update();
+  });
+</script>
 
 <div class="card">
-  <div class="row-between" style="margin-bottom:16px">
-    <div class="card-title" style="margin:0">Add an appointment slot</div>
-  </div>
-  {{SLOT_NOTICE}}
-  <form method="post" action="/setup/hospital/slots">
-    <div class="row" style="gap:12px;align-items:flex-end;flex-wrap:wrap">
-      <div class="form-field" style="flex:0 0 200px">
-        <label for="department_id">Department</label>
-        <select id="department_id" name="department_id" required>
-          <option value="">Choose a department</option>
-          {{DEPARTMENT_OPTIONS}}
-        </select>
-      </div>
-      <div class="form-field" style="flex:0 0 200px">
-        <label for="doctor_name">Doctor</label>
-        <input id="doctor_name" name="doctor_name" type="text" placeholder="Dr Ito">
-      </div>
-      <div class="form-field" style="flex:0 0 210px">
-        <label for="slot_datetime">When</label>
-        <input id="slot_datetime" name="slot_datetime" type="text" placeholder="2026-10-01 09:00" required>
-      </div>
-      <div class="form-field" style="flex:0 0 130px">
-        <label for="duration_minutes">Minutes</label>
-        <input id="duration_minutes" name="duration_minutes" type="number" min="5" step="5" value="30">
-      </div>
-      <button class="btn btn-primary" type="submit" {{SLOT_BUTTON_DISABLED}}>Add slot</button>
-    </div>
-    <p class="form-hint">Times are written as year, dash, month, dash, day, then a 24 hour clock, for example 2026-10-01 09:00.</p>
-  </form>
-</div>
-
-<div class="card" style="padding:0">
   <div class="row-between" style="padding:20px 24px 16px">
-    <div class="card-title" style="margin:0">Your departments</div>
+    <div class="card-title" style="margin:0">Department schedules</div>
   </div>
   <div class="table-wrap" style="padding-bottom:8px">
     {{DEPARTMENTS}}
@@ -74,16 +94,7 @@
 
 <div class="card" style="padding:0">
   <div class="row-between" style="padding:20px 24px 16px">
-    <div class="card-title" style="margin:0">Appointment slots</div>
-  </div>
-  <div class="table-wrap" style="padding-bottom:8px">
-    {{SLOTS}}
-  </div>
-</div>
-
-<div class="card" style="padding:0">
-  <div class="row-between" style="padding:20px 24px 16px">
-    <div class="card-title" style="margin:0">Appointments</div>
+    <div class="card-title" style="margin:0">Upcoming appointments</div>
   </div>
   <div class="table-wrap" style="padding-bottom:8px">
     {{APPOINTMENTS}}

@@ -14,7 +14,7 @@
   // The last two lines matter: slot times and doctor names only come from a
   // tool, and a failed tool means the caller is told so, not guessed around.
   // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/prompting-guide
-  "system_prompt": "You are the scheduling assistant for {business_name}, a hospital. Help callers find available appointment slots and book them. Collect the patient name, phone number, department, and preferred date. Call check_slots before offering a time, then book_appointment to confirm. If a tool returns ok false, say what went wrong in plain words, for example that the slot was just taken or that the department does not exist. Never name a doctor or a time you did not get from a tool, and never give medical advice. Keep responses under 2 sentences. Do not make up information you were not given.",
+  "system_prompt": "Today is September 29, 2026. When a caller says a date without a year, use the current year, or the next year if that date has already passed. Always confirm the year back to the caller if there is any chance of confusion. You are the scheduling assistant for {business_name}, a hospital. When a caller asks for an appointment, collect the department and call check_slots. The date is optional. Read back the first 3 available times. If the caller picks one, call book_appointment with the exact department and slot_datetime. When collecting patient details during booking, always ask, And what email address should I send your confirmation and reminder to? Tell them, We'll send a confirmation to that address now, and a reminder before your appointment. If the caller declines, pass an empty patient_email, complete the booking, and mention they will not receive a reminder. If an email was provided, tell them, I've sent a confirmation to the email you provided. You'll also get a reminder before your appointment. If no email was provided, say that no email confirmation or reminder will be sent. If the slot is taken, apologize and offer the next available time. If check_slots returns a message saying fully booked, tell the caller the next available day and offer to check it. Before booking any appointment, if the caller describes pain or symptoms, call triage_symptoms with their exact words. If risk is emergency, say, I'm concerned about what you're describing. Please hang up and call 911 right now. Do not proceed with booking and never give medical advice. If check_slots returns no slots, say, I don't have any openings on that date. The next available day is the next_available value. After completing the caller's request, ask, Is there anything else I can help you with today? If the caller says no or indicates they are done, say, Thank you for calling {business_name}. Your confirmation will be sent shortly. Have a wonderful day. Then call end_call with reason caller_done and do not continue the conversation. Never say you are unable to access the schedule because the tools always return a result. Keep responses under 2 sentences and do not make up information. When the check_slots tool returns an empty slots list, that is a normal answer. Tell the caller there are no openings on that date and offer the next available day. Never say you are having trouble accessing the schedule. You act with the judgement of a triage nurse, never a plain booking clerk. On every call: (1) Ask what symptoms the caller has before suggesting a department. (2) If the caller mentions chest pain, difficulty breathing, severe bleeding, sudden weakness on one side, slurred speech, suicidal thoughts, an overdose, or a severe allergic reaction, call the triage_symptoms tool immediately. If it returns risk=emergency, tell the caller to hang up and call emergency services now, and do NOT book. (3) For non-emergency symptoms, suggest the most appropriate department, then call check_slots. (4) When check_slots returns an empty list, tell the caller there are no openings on that date and offer the next available day. Never say you are having trouble accessing the schedule. (5) Never diagnose, never prescribe, never give medical advice.",
 
   // Without a greeting the agent says nothing when the call connects, and
   // silence on a fresh line reads as a dropped call.
@@ -31,7 +31,7 @@
       // Read by the model to decide when to call it, so it says when to use
       // the tool, not just what the tool does.
       "name": "check_slots",
-      "description": "List open appointment slots in one department on one date. Use before telling a caller a time is free.",
+      "description": "Generate open appointment times for a department from its operating schedule. Include a date when the caller asks about one day; omit it to find the next working day.",
 
       // interactive keeps the agent talking while the query runs, so a slow
       // or failing tool never reads as a dropped line. hold would silence the
@@ -47,9 +47,9 @@
           // registered in setup, so a wrong name comes back as an error the
           // agent can read out instead of an empty list.
           "department": { "type": "string" },
-          "date": { "type": "string", "description": "Appointment date as YYYY-MM-DD" }
+          "date": { "type": "string", "description": "Optional appointment date as YYYY-MM-DD" }
         },
-        "required": ["department", "date"]
+        "required": ["department"]
       },
 
       // AssemblyAI makes this request, not the browser, so the tool also works
@@ -76,17 +76,55 @@
         "type": "object",
         "properties": {
           "department": { "type": "string" },
-          "doctor_name": { "type": "string" },
+          "slot_datetime": { "type": "string", "description": "Exact datetime returned by check_slots" },
           "patient_name": { "type": "string" },
           "patient_phone": { "type": "string" },
-          "slot_datetime": { "type": "string", "description": "The slot time from check_slots" },
+          "patient_email": { "type": "string", "description": "The patient's email address for appointment reminders. Ask for it if the caller is willing to share." },
           "reason": { "type": "string" }
         },
-        "required": ["department", "patient_name", "patient_phone", "slot_datetime"]
+        "required": ["department", "slot_datetime", "patient_name", "patient_phone", "patient_email"]
       },
 
       "http": {
         "url": "${CALLDESK_TOOL_BASE}/book_appointment",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "triage_symptoms",
+      "description": "Check whether symptoms require emergency care before scheduling.",
+      "execution_mode": "interactive",
+      "timeout_seconds": 15,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symptoms": { "type": "string", "description": "The caller's exact symptom words" }
+        },
+        "required": ["symptoms"]
+      },
+      "http": {
+        "url": "${CALLDESK_TOOL_BASE}/triage_symptoms",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "end_call",
+      "description": "End the current call after the caller confirms they are done. Say a proper goodbye first.",
+      "execution_mode": "interactive",
+      "timeout_seconds": 5,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": ["completed", "caller_done", "transferred"],
+            "description": "Why the call is ending"
+          }
+        },
+        "required": ["reason"]
+      },
+      "http": {
+        "url": "${CALLDESK_TOOL_BASE}/end_call",
         "http_method": "POST"
       }
     }

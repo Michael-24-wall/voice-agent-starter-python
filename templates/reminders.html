@@ -1,0 +1,35 @@
+<div class="page-head">
+  <div>
+    <h1>Appointment reminders</h1>
+    <p class="sub">Send patients a text message and an optional email before their appointment.</p>
+  </div>
+  <div class="row-end"><a class="btn btn-secondary" href="/dashboard">Dashboard</a></div>
+</div>
+
+{{ERROR}}
+
+<div class="card">
+  <form method="post" action="/settings/reminders">
+    <section class="settings-section">
+      <h2>SMS reminders</h2>
+      <label class="check-inline"><input type="checkbox" name="enabled" {{SMS_ENABLED}}> Enabled</label>
+      <div class="form-field"><label for="hours_before">Hours before appointment</label><input id="hours_before" name="hours_before" type="number" min="0" value="{{HOURS_BEFORE}}" required></div>
+      <div class="form-field"><label for="sms_message_template">Message template</label><textarea id="sms_message_template" name="sms_message_template" rows="3">{{SMS_TEMPLATE}}</textarea></div>
+    </section>
+
+    <section class="settings-section">
+      <h2>Email reminders</h2>
+      <label class="check-inline"><input type="checkbox" name="email_enabled" {{EMAIL_ENABLED}}> Enabled</label>
+      <div class="form-field"><label for="email_subject_template">Subject template</label><input id="email_subject_template" name="email_subject_template" type="text" value="{{EMAIL_SUBJECT}}"></div>
+      <div class="form-field"><label for="email_body_template">Body template</label><textarea id="email_body_template" name="email_body_template" rows="6">{{EMAIL_BODY}}</textarea></div>
+      <p class="form-hint">Email reminders use the same hours-before setting as SMS. SMTP credentials are configured in the server environment.</p>
+    </section>
+
+    <div class="row-end"><button class="btn btn-primary" type="submit">Save reminder settings</button></div>
+  </form>
+</div>
+
+<div class="preview-grid">
+  <section class="card"><h2>SMS preview</h2><p>{{SMS_PREVIEW}}</p></section>
+  <section class="card"><h2>Email preview</h2><p><strong>{{EMAIL_PREVIEW_SUBJECT}}</strong></p><p>{{EMAIL_PREVIEW_BODY}}</p></section>
+</div>

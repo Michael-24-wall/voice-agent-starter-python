@@ -109,19 +109,17 @@ def seed_hospital():
         return user_id
     by_name = {}
     for name, description in HOSPITAL["departments"]:
-        by_name[name] = db.add_department(user_id, name, description)
+        doctors = [doctor for department, doctor, _date, _times in HOSPITAL["slots"]
+                   if department == name]
+        by_name[name] = db.add_department(
+            user_id, name, description, default_doctor=doctors[0] if doctors else "")
     print(f"  {len(by_name)} departments")
 
-    count = 0
-    for department, doctor, date, times in HOSPITAL["slots"]:
-        for time in times:
-            db.add_slot(user_id, by_name[department], doctor, f"{date} {time}:00", 30)
-            count += 1
-    print(f"  {count} appointment slots")
+    print("  schedules configured from department defaults")
 
     for department, doctor, when, patient, phone, reason in HOSPITAL["bookings"]:
         try:
-            db.book_appointment(user_id, department, doctor, patient, phone, when, reason)
+            db.book_appointment(user_id, department, when, patient, phone, reason)
         except ValueError as err:
             # A slot already taken just means a previous run got here first.
             print(f"  skipped {department} {when}: {err}")

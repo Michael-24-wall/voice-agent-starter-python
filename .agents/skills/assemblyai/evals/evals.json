@@ -1,0 +1,96 @@
+{
+  "skill_name": "assemblyai",
+  "evals": [
+    {
+      "id": 1,
+      "eval_name": "basic-transcription-summary",
+      "prompt": "I have a meeting recording at ~/recordings/standup.mp3. I need to transcribe it with speaker labels and get a summary. Use Python and AssemblyAI.",
+      "expected_output": "A Python script using the AssemblyAI SDK with speaker_labels enabled, a summary produced via Speech Understanding summarization or the LLM Gateway (NOT the deprecated top-level summarization param or LeMUR), and transcript status error-checking.",
+      "files": [],
+      "assertions": [
+        {"text": "Uses speaker_labels=True", "type": "contains"},
+        {"text": "Produces the summary via Speech Understanding (speech_understanding.request.summarization) or the LLM Gateway — not the deprecated top-level summarization/auto_chapters params and not LeMUR", "type": "semantic"},
+        {"text": "Checks transcript.status for errors", "type": "semantic"},
+        {"text": "Uses SDK (not raw API)", "type": "semantic"}
+      ]
+    },
+    {
+      "id": 2,
+      "eval_name": "livekit-dental-voice-agent",
+      "prompt": "I'm building a voice agent for a dental office using LiveKit and AssemblyAI. Patients will be calling to schedule appointments and I need it to accurately capture names, procedure types, and dates. Can you set up the STT pipeline?",
+      "expected_output": "A LiveKit STT setup using universal-3-5-pro with correctly tuned endpointing/VAD parameters and domain keyterms, avoiding deprecated parameters and removed models.",
+      "files": [],
+      "assertions": [
+        {"text": "Uses universal-3-5-pro (not u3-rt-pro, which was removed July 2026, or older streaming models)", "type": "semantic"},
+        {"text": "Sets max_turn_silence explicitly (not relying on LiveKit plugin default of 100ms)", "type": "semantic"},
+        {"text": "Sets endpointing min_delay to 0 (via TurnHandlingOptions) to avoid the additive 500ms delay", "type": "semantic"},
+        {"text": "Synchronizes VAD thresholds (both ~0.3)", "type": "semantic"},
+        {"text": "Includes keyterms_prompt with dental vocabulary", "type": "semantic"},
+        {"text": "Uses STT-based turn detection (turn_detection='stt')", "type": "semantic"},
+        {"text": "Does not use deprecated word_boost parameter", "type": "semantic"}
+      ]
+    },
+    {
+      "id": 3,
+      "eval_name": "llm-gateway-pii-typescript",
+      "prompt": "I need to transcribe customer support calls, redact PII (names, phone numbers, SSNs), and then use Claude through AssemblyAI's API to extract action items and sentiment from each call. Show me how in TypeScript.",
+      "expected_output": "A TypeScript implementation using PII redaction policies and AssemblyAI's LLM Gateway (not LeMUR) with a correct Claude model ID and message-based input.",
+      "files": [],
+      "assertions": [
+        {"text": "Auth uses raw API key (no Bearer prefix)", "type": "semantic"},
+        {"text": "Enables PII redaction with person_name, phone_number, us_social_security_number policies", "type": "semantic"},
+        {"text": "Uses LLM Gateway (llm-gateway.assemblyai.com), NOT LeMUR", "type": "semantic"},
+        {"text": "Uses a current Claude model ID without provider prefix (e.g. claude-sonnet-4-5-20250929, claude-sonnet-4-6, or claude-sonnet-5 — not anthropic/claude-... and not removed Claude 4.0 IDs)", "type": "semantic"},
+        {"text": "Passes transcript text in messages, not transcript_ids", "type": "semantic"},
+        {"text": "If structured outputs (json_schema) are used, the chosen model supports them (Claude 4.5+/OpenAI/Gemini — not Claude 3.x and not claude-sonnet-5)", "type": "semantic"}
+      ]
+    },
+    {
+      "id": 4,
+      "eval_name": "sync-stt-voice-memos",
+      "prompt": "Users of my app record short voice memos (usually 30-60 seconds) and I want the transcript back immediately in the same request when the upload hits my Python backend - no polling or job IDs. We're on AssemblyAI. Some memos mention our product names like 'FlowSync Pro' and 'TaskBridge'.",
+      "expected_output": "A Python implementation using the Sync STT API (SyncTranscriber or POST sync.assemblyai.com/v1/transcribe with X-AAI-Model universal-3-5-pro), keyterms for the product names, and awareness of the 120s limit with async fallback for longer audio.",
+      "files": [],
+      "assertions": [
+        {"text": "Uses the Sync STT API (SyncTranscriber or sync.assemblyai.com), not the async transcript API with polling", "type": "semantic"},
+        {"text": "Uses universal-3-5-pro as the model", "type": "semantic"},
+        {"text": "Biases product names via keyterms_prompt (not word_boost)", "type": "semantic"},
+        {"text": "Mentions the 120s (or 40MB) sync limit and/or falls back to the async API for longer recordings", "type": "semantic"},
+        {"text": "Does not pass unsupported async-only params (e.g. speaker_labels, redact_pii) in the sync config", "type": "semantic"}
+      ]
+    },
+    {
+      "id": 5,
+      "eval_name": "python-mic-streaming-sdk-1x",
+      "prompt": "In Python, transcribe my microphone live with AssemblyAI and print partial transcripts as I speak plus the final text for each turn.",
+      "expected_output": "A Python streaming v3 implementation that captures PCM itself (pyaudio/sounddevice) and feeds it to the SDK's realtime transcriber, without the microphone helper and install extra that Python SDK 1.0.0 removed.",
+      "files": [],
+      "assertions": [
+        {"text": "Uses assemblyai.streaming.v3 (not the legacy v2 realtime API, and not a hand-rolled WebSocket when the SDK is available)", "type": "semantic"},
+        {"text": "Does NOT import assemblyai.extras or MicrophoneStream — both were removed in Python SDK 1.0.0", "type": "semantic"},
+        {"text": "Does NOT install assemblyai[extras] — the extra was removed in Python SDK 1.0.0", "type": "semantic"},
+        {"text": "Captures microphone PCM itself (pyaudio, sounddevice, or equivalent) and passes 16-bit PCM chunks to the transcriber's stream() method", "type": "semantic"},
+        {"text": "Sets speech_model to universal-3-5-pro and passes sample_rate explicitly (required for PCM)", "type": "semantic"},
+        {"text": "If it pins a version, pins the current assemblyai>=1.5.4 (or at minimum >=1.0.0) rather than a 0.64.x release", "type": "semantic"}
+      ]
+    },
+    {
+      "id": 6,
+      "eval_name": "dictation-api-clinical-note",
+      "prompt": "I'm building a dictation feature for our clinic's EHR. A doctor taps record, dictates a visit note for up to a minute or so, taps stop, and I want to show them a cleaned-up chart note (no ums, self-corrections resolved) while also storing exactly what they said. Drug names like lisinopril and metoprolol need to come out spelled right. We use AssemblyAI. Show me the backend call in Python.",
+      "expected_output": "A Python implementation calling the Dictation API (POST https://dictation.assemblyai.com/v1/transcribe/live, or DictationTranscriber on Python SDK >=1.5.2) with a config part sent first (stt_prompt describing the dictation, keyterms_prompt with the drug names, llm_instruction for the chart note), WAV/PCM audio, and a response handler that stores `text` verbatim and displays `llm_response` with a fallback to `text` when the rewrite failed.",
+      "files": [],
+      "assertions": [
+        {"text": "Uses the Dictation API (dictation.assemblyai.com/v1/transcribe/live or DictationTranscriber), not Sync STT, the async transcript API, or a separate LLM Gateway call for the cleanup", "type": "semantic"},
+        {"text": "Auth uses the raw API key (no Bearer prefix)", "type": "semantic"},
+        {"text": "If calling over HTTP, sends a multipart body with the `config` JSON part BEFORE the `audio` part (never audio-only)", "type": "semantic"},
+        {"text": "Uses llm_instruction to request the chart-note rewrite (or relies on the default cleanup) — not a prompt/instruction stuffed into stt_prompt or keyterms_prompt", "type": "semantic"},
+        {"text": "Biases the drug names via keyterms_prompt (not word_boost)", "type": "semantic"},
+        {"text": "Stores/keeps `text` as the verbatim transcript and uses `llm_response` (or final_text) for display, falling back to `text` when llm_response is null / llm_error is set — does not treat a rewrite failure as a request failure", "type": "semantic"},
+        {"text": "Sends WAV or raw 16-bit PCM audio (with sample_rate and channels in config for PCM) and does not send MP3/M4A/WebM", "type": "semantic"},
+        {"text": "Does not pass unsupported fields (model, timestamps, conversation_context, speaker_labels, redact_pii) in the dictation config", "type": "semantic"},
+        {"text": "If it uses the SDK, pins assemblyai>=1.5.4 (DictationTranscriber landed in 1.5.2) or otherwise falls back to raw HTTP", "type": "semantic"}
+      ]
+    }
+  ]
+}

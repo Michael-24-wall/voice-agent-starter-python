@@ -12,6 +12,7 @@ import os
 import re
 import json
 import sqlite3
+from datetime import datetime, timedelta
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_DIR = os.path.join(ROOT, "data")
@@ -52,7 +53,21 @@ CREATE TABLE IF NOT EXISTS business_profiles (
     id          INTEGER PRIMARY KEY,
     user_id     INTEGER UNIQUE,
     profile_json TEXT,
+    reminder_hours_before INTEGER DEFAULT 24,
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users (id)
+);
+
+CREATE TABLE IF NOT EXISTS reminder_settings (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER UNIQUE,
+    enabled INTEGER DEFAULT 1,
+    hours_before INTEGER DEFAULT 24,
+    sms_message_template TEXT DEFAULT 'Reminder: your appointment at {business_name} is on {date} at {time}.',
+    email_enabled INTEGER DEFAULT 1,
+    email_subject_template TEXT DEFAULT 'Appointment reminder from {business_name}',
+    email_body_template TEXT DEFAULT 'Hi {patient_name}, this is a reminder of your appointment at {business_name} on {date} at {time} with {department}. If you need to reschedule, please call us. Thank you.',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
@@ -132,34 +147,33 @@ CREATE TABLE IF NOT EXISTS hospital_departments (
     user_id     INTEGER,
     name        TEXT,
     description TEXT,
+    opening_time TEXT DEFAULT '09:00',
+    closing_time TEXT DEFAULT '17:00',
+    slot_duration_minutes INTEGER DEFAULT 30,
+    working_days TEXT DEFAULT 'mon,tue,wed,thu,fri',
+    daily_capacity INTEGER DEFAULT 16,
+    default_doctor TEXT DEFAULT '',
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users (id)
-);
-
-CREATE TABLE IF NOT EXISTS hospital_slots (
-    id              INTEGER PRIMARY KEY,
-    user_id         INTEGER,
-    department_id   INTEGER,
-    doctor_name     TEXT,
-    slot_datetime   TIMESTAMP,
-    duration_minutes INTEGER DEFAULT 30,
-    status          TEXT DEFAULT 'available',
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users (id),
-    FOREIGN KEY (department_id) REFERENCES hospital_departments (id)
 );
 
 CREATE TABLE IF NOT EXISTS hospital_appointments (
     id            INTEGER PRIMARY KEY,
     user_id       INTEGER,
-    slot_id       INTEGER,
+    department_id INTEGER,
+    slot_datetime TIMESTAMP,
     patient_name  TEXT,
     patient_phone TEXT,
     reason        TEXT,
     status        TEXT DEFAULT 'confirmed',
+    reminder_sent INTEGER DEFAULT 0,
+    urgency       TEXT DEFAULT 'routine',
+    patient_email TEXT,
+    email_reminder_sent INTEGER DEFAULT 0,
+    email_reminder_sent_at TIMESTAMP,
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users (id),
-    FOREIGN KEY (slot_id) REFERENCES hospital_slots (id)
+    FOREIGN KEY (department_id) REFERENCES hospital_departments (id)
 );
 
 CREATE TABLE IF NOT EXISTS restaurant_tables (
@@ -193,8 +207,6 @@ CREATE INDEX IF NOT EXISTS idx_calls_user    ON calls (user_id, created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_rooms_user    ON hotel_rooms (user_id);
 CREATE INDEX IF NOT EXISTS idx_bookings_user ON hotel_bookings (user_id, check_in);
 CREATE INDEX IF NOT EXISTS idx_depts_user    ON hospital_departments (user_id);
-CREATE INDEX IF NOT EXISTS idx_slots_user    ON hospital_slots (user_id, slot_datetime);
-CREATE INDEX IF NOT EXISTS idx_appts_user    ON hospital_appointments (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tables_user   ON restaurant_tables (user_id);
 CREATE INDEX IF NOT EXISTS idx_resv_user     ON restaurant_reservations (user_id, reservation_datetime);
 """
@@ -257,6 +269,87 @@ def _migrate(conn):
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users (google_id)")
 
+    if _table_exists(conn, "business_profiles"):
+        _add_column(conn, "business_profiles", "reminder_hours_before", "INTEGER DEFAULT 24")
+        conn.execute(
+            "UPDATE business_profiles SET reminder_hours_before = 24 "
+            "WHERE reminder_hours_before IS NULL")
+
+    if _table_exists(conn, "hospital_appointments"):
+        _add_column(conn, "hospital_appointments", "department_id", "INTEGER")
+        _add_column(conn, "hospital_appointments", "slot_datetime", "TIMESTAMP")
+        _add_column(conn, "hospital_appointments", "reminder_sent", "INTEGER DEFAULT 0")
+        _add_column(conn, "hospital_appointments", "urgency", "TEXT DEFAULT 'routine'")
+        _add_column(conn, "hospital_appointments", "patient_email", "TEXT")
+        _add_column(conn, "hospital_appointments", "email_reminder_sent", "INTEGER DEFAULT 0")
+        _add_column(conn, "hospital_appointments", "email_reminder_sent_at", "TIMESTAMP")
+        conn.execute(
+            "UPDATE hospital_appointments SET reminder_sent = 0 "
+            "WHERE reminder_sent IS NULL")
+        conn.execute(
+            "UPDATE hospital_appointments SET urgency = 'routine' "
+            "WHERE urgency IS NULL OR urgency = ''")
+
+    if _table_exists(conn, "hospital_departments"):
+        for column, declaration in (
+            ("opening_time", "TEXT DEFAULT '09:00'"),
+            ("closing_time", "TEXT DEFAULT '17:00'"),
+            ("slot_duration_minutes", "INTEGER DEFAULT 30"),
+            ("working_days", "TEXT DEFAULT 'mon,tue,wed,thu,fri'"),
+            ("daily_capacity", "INTEGER DEFAULT 16"),
+            ("default_doctor", "TEXT DEFAULT ''"),
+        ):
+            _add_column(conn, "hospital_departments", column, declaration)
+        conn.execute("UPDATE hospital_departments SET opening_time = '09:00' WHERE opening_time IS NULL OR opening_time = ''")
+        conn.execute("UPDATE hospital_departments SET closing_time = '17:00' WHERE closing_time IS NULL OR closing_time = ''")
+        conn.execute("UPDATE hospital_departments SET slot_duration_minutes = 30 WHERE slot_duration_minutes IS NULL OR slot_duration_minutes < 1")
+        conn.execute("UPDATE hospital_departments SET working_days = 'mon,tue,wed,thu,fri' WHERE working_days IS NULL OR working_days = ''")
+        conn.execute("UPDATE hospital_departments SET daily_capacity = 16 WHERE daily_capacity IS NULL OR daily_capacity < 1")
+        conn.execute("UPDATE hospital_departments SET default_doctor = '' WHERE default_doctor IS NULL")
+
+    if _table_exists(conn, "hospital_slots") and _table_exists(conn, "hospital_appointments"):
+        conn.execute(
+            "UPDATE hospital_appointments SET department_id = "
+            "(SELECT department_id FROM hospital_slots WHERE hospital_slots.id = hospital_appointments.slot_id), "
+            "slot_datetime = (SELECT slot_datetime FROM hospital_slots WHERE hospital_slots.id = hospital_appointments.slot_id) "
+            "WHERE slot_id IS NOT NULL")
+        if "slot_id" in _columns(conn, "hospital_appointments"):
+            conn.execute("ALTER TABLE hospital_appointments RENAME TO hospital_appointments_old")
+            conn.execute("""CREATE TABLE hospital_appointments (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER,
+                department_id INTEGER,
+                slot_datetime TIMESTAMP,
+                patient_name TEXT,
+                patient_phone TEXT,
+                reason TEXT,
+                status TEXT DEFAULT 'confirmed',
+                reminder_sent INTEGER DEFAULT 0,
+                urgency TEXT DEFAULT 'routine',
+                patient_email TEXT,
+                email_reminder_sent INTEGER DEFAULT 0,
+                email_reminder_sent_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                FOREIGN KEY (department_id) REFERENCES hospital_departments (id)
+            )""")
+            conn.execute(
+                "INSERT INTO hospital_appointments "
+                "(id, user_id, department_id, slot_datetime, patient_name, patient_phone, "
+                "reason, status, reminder_sent, urgency, patient_email, "
+                "email_reminder_sent, email_reminder_sent_at, created_at) "
+                "SELECT id, user_id, department_id, slot_datetime, patient_name, patient_phone, "
+                "reason, status, COALESCE(reminder_sent, 0), COALESCE(urgency, 'routine'), "
+                "NULL, 0, NULL, created_at "
+                "FROM hospital_appointments_old")
+            conn.execute("DROP TABLE hospital_appointments_old")
+        conn.execute("DROP TABLE hospital_slots")
+
+    conn.execute(
+        "INSERT OR IGNORE INTO reminder_settings (user_id, hours_before) "
+        "SELECT id, COALESCE((SELECT reminder_hours_before FROM business_profiles "
+        "WHERE business_profiles.user_id = users.id), 24) FROM users")
+
     # phone_numbers gained answering_mode and forward_to.
     if _table_exists(conn, "phone_numbers"):
         _add_column(conn, "phone_numbers", "answering_mode", "TEXT DEFAULT 'agent'")
@@ -306,6 +399,8 @@ def init_db():
     with connect() as conn:
         conn.executescript(SCHEMA)
         _migrate(conn)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_appts_user ON hospital_appointments (user_id, slot_datetime)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_appts_dept_time ON hospital_appointments (department_id, slot_datetime)")
     return DB_PATH
 
 
@@ -459,6 +554,103 @@ def get_business_profile(user_id):
         print(f"db: unreadable profile for user {int(user_id)}, ignoring it", flush=True)
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def get_reminder_hours_before(user_id):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT reminder_hours_before FROM business_profiles WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+    if not row or row["reminder_hours_before"] is None:
+        return 24
+    return max(0, int(row["reminder_hours_before"]))
+
+
+def set_reminder_hours_before(user_id, hours):
+    hours = max(0, int(hours))
+    with connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO reminder_settings (user_id) VALUES (?)", (int(user_id),))
+        conn.execute("UPDATE reminder_settings SET hours_before = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                     (hours, int(user_id)))
+
+
+DEFAULT_SMS_TEMPLATE = "Reminder: your appointment at {business_name} is on {date} at {time}."
+DEFAULT_EMAIL_SUBJECT = "Appointment reminder from {business_name}"
+DEFAULT_EMAIL_BODY = ("Hi {patient_name}, this is a reminder of your appointment at "
+                      "{business_name} on {date} at {time} with {department}. "
+                      "If you need to reschedule, please call us. Thank you.")
+
+
+def get_reminder_settings(user_id):
+    with connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO reminder_settings (user_id) VALUES (?)", (int(user_id),))
+        row = conn.execute("SELECT * FROM reminder_settings WHERE user_id = ?", (int(user_id),)).fetchone()
+    return dict(row)
+
+
+def update_reminder_settings(user_id, values):
+    settings = get_reminder_settings(user_id)
+    merged = {**settings, **values}
+    with connect() as conn:
+        conn.execute(
+            "UPDATE reminder_settings SET enabled = ?, hours_before = ?, sms_message_template = ?, "
+            "email_enabled = ?, email_subject_template = ?, email_body_template = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+            (int(bool(merged.get("enabled", 1))), max(0, int(merged.get("hours_before", 24))),
+             merged.get("sms_message_template") or DEFAULT_SMS_TEMPLATE,
+             int(bool(merged.get("email_enabled", 1))),
+             merged.get("email_subject_template") or DEFAULT_EMAIL_SUBJECT,
+             merged.get("email_body_template") or DEFAULT_EMAIL_BODY, int(user_id)),
+        )
+
+
+def _pending_reminders(window_hours, email=False):
+    column = "email_reminder_sent" if email else "reminder_sent"
+    now = datetime.utcnow()
+    end = now + timedelta(hours=float(window_hours))
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT a.*, u.business_name, d.name AS department "
+            f"FROM hospital_appointments a JOIN users u ON u.id = a.user_id "
+            f"JOIN hospital_departments d ON d.id = a.department_id "
+            f"WHERE a.{column} = 0 AND a.status = 'confirmed' "
+            "AND datetime(a.slot_datetime) BETWEEN datetime(?) AND datetime(?) "
+            "ORDER BY a.slot_datetime",
+            (now.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["user"] = get_user_by_id(item["user_id"])
+        result.append(item)
+    return result
+
+
+def list_pending_reminders(window_hours):
+    return _pending_reminders(window_hours, email=False)
+
+
+def list_pending_email_reminders(window_hours):
+    return _pending_reminders(window_hours, email=True)
+
+
+def mark_email_reminder_sent(appointment_id):
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE hospital_appointments SET email_reminder_sent = 1, "
+            "email_reminder_sent_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND email_reminder_sent = 0", (int(appointment_id),))
+        return cur.rowcount == 1
+
+
+def reminders_sent_this_week(user_id):
+    with connect() as conn:
+        return conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN reminder_sent = 1 THEN 1 ELSE 0 END), 0) + "
+            "COALESCE(SUM(CASE WHEN email_reminder_sent = 1 THEN 1 ELSE 0 END), 0) "
+            "FROM hospital_appointments WHERE user_id = ? AND created_at >= datetime('now', '-7 days')",
+            (int(user_id),)).fetchone()[0]
 
 
 def get_user_by_google_id(google_id):
@@ -658,7 +850,7 @@ def list_calls(user_id, limit=None, offset=0, since=None):
     if since:
         sql += " AND created_at >= ?"
         params.append(str(since))
-    sql += " ORDER BY created_at DESC, id DESC"
+    sql += " ORDER BY CASE WHEN urgency = 'emergency' THEN 0 ELSE 1 END, created_at DESC, id DESC"
     if limit:
         sql += " LIMIT ? OFFSET ?"
         params += [int(limit), int(offset)]
@@ -701,6 +893,9 @@ RESERVATION_HOLD_MINUTES = 120
 # Half-open date ranges: a guest leaving on the 3rd can check into the room
 # freed on the 3rd, so overlap is a < b and b < a rather than <=.
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+SLOT_DATETIME_RE = re.compile(
+    r"^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$"
+)
 
 
 def _check_date(value, field):
@@ -708,6 +903,23 @@ def _check_date(value, field):
     if not DATE_RE.match(v):
         raise ValueError(f"{field} must look like 2026-10-01")
     return v
+
+
+def _normalize_slot_datetime(value):
+    match = SLOT_DATETIME_RE.match((value or "").strip())
+    if not match:
+        raise ValueError("slot time must look like 2026-10-01 09:00")
+    year, month, day, hour, minute, second = (
+        int(part or 0) for part in match.groups())
+    if not match.group(4):
+        hour = minute = second = 0
+    try:
+        parsed = datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        raise ValueError("slot time must be a real date and time") from None
+    return parsed.strftime("%Y-%m-%d 00:00" if not match.group(4)
+                          else "%Y-%m-%d %H:%M:%S" if match.group(6)
+                          else "%Y-%m-%d %H:%M")
 
 
 # --- hotel ----------------------------------------------------------------
@@ -851,148 +1063,286 @@ def list_departments(user_id):
     return [dict(r) for r in rows]
 
 
-def add_department(user_id, name, description=""):
+def _time_value(value, field):
+    try:
+        return datetime.strptime((value or "").strip(), "%H:%M")
+    except ValueError:
+        raise ValueError(f"{field} must use HH:MM") from None
+
+
+def _date_value(value):
+    try:
+        return datetime.strptime((value or "").strip(), "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError("date must use YYYY-MM-DD") from None
+
+
+def _working_days(value):
+    names = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+    raw_days = value if isinstance(value, (list, tuple)) else (value or "").split(",")
+    days = [day.strip().lower()[:3] for day in raw_days]
+    return [day for day in days if day in names]
+
+
+def add_department(user_id, name, description="", opening_time="09:00",
+                   closing_time="17:00", slot_duration_minutes=30,
+                   working_days="mon,tue,wed,thu,fri", daily_capacity=16,
+                   default_doctor=""):
+    _time_value(opening_time, "opening time")
+    _time_value(closing_time, "closing time")
+    duration = int(slot_duration_minutes or 30)
+    capacity = int(daily_capacity or 16)
+    if duration < 1 or capacity < 1 or not _working_days(working_days):
+        raise ValueError("schedule settings are not valid")
     with connect() as conn:
         cur = conn.execute(
-            "INSERT INTO hospital_departments (user_id, name, description) VALUES (?, ?, ?)",
-            (int(user_id), name.strip(), (description or "").strip()),
+            "INSERT INTO hospital_departments "
+            "(user_id, name, description, opening_time, closing_time, slot_duration_minutes, "
+            "working_days, daily_capacity, default_doctor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (int(user_id), name.strip(), (description or "").strip(), opening_time,
+             closing_time, duration, ",".join(_working_days(working_days)), capacity,
+             (default_doctor or "").strip()),
         )
         return cur.lastrowid
 
 
-def list_slots(user_id, department_id=None, limit=50):
-    sql = ("SELECT s.*, d.name AS department FROM hospital_slots s "
-           "LEFT JOIN hospital_departments d ON d.id = s.department_id "
-           "WHERE s.user_id = ?")
-    params = [int(user_id)]
-    if department_id:
-        sql += " AND s.department_id = ?"
-        params.append(int(department_id))
-    sql += " ORDER BY s.slot_datetime, s.id LIMIT ?"
-    params.append(int(limit))
-    with connect() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return [dict(r) for r in rows]
-
-
-def add_slot(user_id, department_id, doctor_name, slot_datetime, duration_minutes=30):
+def update_department_schedule(user_id, department_id, opening_time, closing_time,
+                               slot_duration_minutes, working_days, daily_capacity,
+                               default_doctor):
+    _time_value(opening_time, "opening time")
+    _time_value(closing_time, "closing time")
+    duration = int(slot_duration_minutes or 30)
+    capacity = int(daily_capacity or 16)
+    days = _working_days(working_days)
+    if duration < 1 or capacity < 1 or not days:
+        raise ValueError("schedule settings are not valid")
     with connect() as conn:
         cur = conn.execute(
-            "INSERT INTO hospital_slots (user_id, department_id, doctor_name, "
-            "slot_datetime, duration_minutes) VALUES (?, ?, ?, ?, ?)",
-            (int(user_id), int(department_id), (doctor_name or "").strip(),
-             (slot_datetime or "").strip().replace("T", " "),
-             int(duration_minutes or 30)),
+            "UPDATE hospital_departments SET opening_time = ?, closing_time = ?, "
+            "slot_duration_minutes = ?, working_days = ?, daily_capacity = ?, default_doctor = ? "
+            "WHERE id = ? AND user_id = ?",
+            (opening_time, closing_time, duration, ",".join(days), capacity,
+             (default_doctor or "").strip(), int(department_id), int(user_id)),
         )
-        return cur.lastrowid
+        if cur.rowcount != 1:
+            raise ValueError("that department is not on your list")
 
 
-def delete_slot(user_id, slot_id):
+def _department(user_id, department):
+    """Find a department by name, tolerant of how a caller phrases it."""
+    raw = (department or "").strip().lower()
+    if not raw:
+        raise ValueError("which department did you mean?")
     with connect() as conn:
-        slot = conn.execute(
-            "SELECT slot_datetime FROM hospital_slots "
-            "WHERE id = ? AND user_id = ?", (int(slot_id), int(user_id))
+        row = conn.execute(
+            "SELECT * FROM hospital_departments WHERE user_id = ? "
+            "AND LOWER(name) = ?", (int(user_id), raw)
         ).fetchone()
-        if not slot:
-            raise ValueError("that appointment slot is not on your list")
-        booked = conn.execute(
-            "SELECT COUNT(*) FROM hospital_appointments WHERE slot_id = ? "
-            "AND COALESCE(status, 'confirmed') != 'cancelled'", (int(slot_id),)
-        ).fetchone()[0]
-        if booked:
-            raise ValueError("that appointment slot already has a booking")
-        cur = conn.execute(
-            "DELETE FROM hospital_slots WHERE id = ? AND user_id = ?",
-            (int(slot_id), int(user_id)),
+        if row:
+            return dict(row)
+        row = conn.execute(
+            "SELECT * FROM hospital_departments WHERE user_id = ? "
+            "AND LOWER(name) LIKE ? || '%'", (int(user_id), raw)
+        ).fetchone()
+        if row:
+            return dict(row)
+        stem = raw
+        for suffix in ("ologist", "ology", "ist", "ian", "er"):
+            if stem.endswith(suffix):
+                stem = stem[:-len(suffix)]
+                break
+        if stem and stem != raw:
+            row = conn.execute(
+                "SELECT * FROM hospital_departments WHERE user_id = ? "
+                "AND LOWER(name) LIKE ? || '%'", (int(user_id), stem)
+            ).fetchone()
+            if row:
+                return dict(row)
+        for word in raw.replace("-", " ").split():
+            if len(word) < 4:
+                continue
+            row = conn.execute(
+                "SELECT * FROM hospital_departments WHERE user_id = ? "
+                "AND LOWER(name) LIKE ? || '%'", (int(user_id), word)
+            ).fetchone()
+            if row:
+                return dict(row)
+        names = [r["name"] for r in conn.execute(
+            "SELECT name FROM hospital_departments WHERE user_id = ? ORDER BY name",
+            (int(user_id),)).fetchall()]
+    if names:
+        raise ValueError(
+            f"I don't have a {department} department. We have: "
+            f"{', '.join(names)}. Which one would you like?"
         )
-        return cur.rowcount
+    raise ValueError("this clinic has no departments set up yet")
+
+
+def _generated_slots(department, date):
+    day = _date_value(date)
+    if day.strftime("%a").lower()[:3] not in _working_days(department["working_days"]):
+        return []
+    opening = _time_value(department["opening_time"], "opening time")
+    closing = _time_value(department["closing_time"], "closing time")
+    duration = int(department["slot_duration_minutes"] or 30)
+    if closing <= opening or duration < 1:
+        raise ValueError("department schedule settings are not valid")
+    slots = []
+    current = opening
+    while current < closing and len(slots) < int(department["daily_capacity"] or 16):
+        slots.append(f"{day:%Y-%m-%d} {current:%H:%M}")
+        current += timedelta(minutes=duration)
+    return slots
+
+
+def next_working_day(department, start_date):
+    date = _date_value(start_date)
+    for _ in range(370):
+        if _generated_slots(department, date.strftime("%Y-%m-%d")):
+            return date.strftime("%Y-%m-%d")
+        date += timedelta(days=1)
+    return None
+
+
+def schedule_info(user_id, department, date=None):
+    department = _department(user_id, department)
+    requested = date or datetime.utcnow().strftime("%Y-%m-%d")
+    _date_value(requested)
+    target = next_working_day(department, requested) if not _generated_slots(
+        department, requested) else requested
+    return department, requested, target
+
+
+def department_daily_count(user_id, department_id, date):
+    with connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM hospital_appointments WHERE user_id = ? "
+            "AND department_id = ? AND date(slot_datetime) = ? "
+            "AND COALESCE(status, 'confirmed') != 'cancelled'",
+            (int(user_id), int(department_id), date),
+        ).fetchone()[0]
+
+
+def next_available_date(user_id, department, after_date):
+    dept = _department(user_id, department)
+    date = _date_value(after_date) + timedelta(days=1)
+    for _ in range(370):
+        candidate = date.strftime("%Y-%m-%d")
+        if _generated_slots(dept, candidate) and find_available_slots(
+                user_id, department, candidate):
+            return candidate
+        date += timedelta(days=1)
+    return None
+
+
+def find_available_slots(user_id, department, date=None):
+    department, requested, target = schedule_info(user_id, department, date)
+    if not target:
+        return []
+    generated = _generated_slots(department, target)
+    with connect() as conn:
+        booked = {
+            row["slot_datetime"][:16]
+            for row in conn.execute(
+                "SELECT slot_datetime FROM hospital_appointments "
+                "WHERE department_id = ? AND date(slot_datetime) = ? "
+                "AND COALESCE(status, 'confirmed') != 'cancelled'",
+                (department["id"], target),
+            )
+        }
+        count = len(booked)
+    if count >= int(department["daily_capacity"] or 16):
+        return []
+    doctor = department["default_doctor"] or ""
+    return [{"department_id": department["id"], "department": department["name"],
+             "doctor_name": doctor, "slot_datetime": value,
+             "duration_minutes": int(department["slot_duration_minutes"] or 30)}
+            for value in generated if value not in booked]
 
 
 def list_appointments(user_id, limit=20):
     with connect() as conn:
         rows = conn.execute(
-            "SELECT a.*, s.slot_datetime, s.doctor_name, d.name AS department "
+            "SELECT a.*, d.name AS department, d.default_doctor AS doctor_name "
             "FROM hospital_appointments a "
-            "LEFT JOIN hospital_slots s ON s.id = a.slot_id "
-            "LEFT JOIN hospital_departments d ON d.id = s.department_id "
-            "WHERE a.user_id = ? ORDER BY a.created_at DESC, a.id DESC LIMIT ?",
+            "LEFT JOIN hospital_departments d ON d.id = a.department_id "
+            "WHERE a.user_id = ? ORDER BY CASE WHEN a.urgency = 'emergency' THEN 0 ELSE 1 END, "
+            "a.slot_datetime, a.id DESC LIMIT ?",
             (int(user_id), int(limit)),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def find_available_slots(user_id, department, date):
-    """Open slots in one department on one day.
-
-    The department is matched case-insensitively because the model may say
-    'cardiology' when the owner wrote 'Cardiology'. An unknown department is an
-    error rather than an empty list, so the agent tells the caller that instead
-    of claiming there are no appointments.
-    """
-    date = _check_date(date, "date")
+def book_appointment(user_id, department, slot_datetime, patient_name,
+                     patient_phone, reason="", urgency="routine", patient_email=None):
+    department = _department(user_id, department)
+    when = _normalize_slot_datetime(slot_datetime)[:16]
     with connect() as conn:
-        dept = conn.execute(
-            "SELECT * FROM hospital_departments WHERE user_id = ? AND name = ? COLLATE NOCASE",
-            (int(user_id), (department or "").strip()),
+        conn.execute("BEGIN IMMEDIATE")
+        taken = conn.execute(
+            "SELECT 1 FROM hospital_appointments WHERE department_id = ? "
+            "AND slot_datetime = ? AND COALESCE(status, 'confirmed') != 'cancelled'",
+            (department["id"], when),
         ).fetchone()
-        if not dept:
-            known = [r["name"] for r in conn.execute(
-                "SELECT name FROM hospital_departments WHERE user_id = ? ORDER BY name",
-                (int(user_id),)).fetchall()]
-            raise ValueError(
-                f"we do not have a {department or 'that'} department"
-                + (f". we have {', '.join(known)}" if known else ""))
-        rows = conn.execute(
-            "SELECT s.*, d.name AS department FROM hospital_slots s "
-            "JOIN hospital_departments d ON d.id = s.department_id "
-            "WHERE s.user_id = ? AND s.department_id = ? "
-            "AND date(s.slot_datetime) = ? AND COALESCE(s.status, 'available') = 'available' "
-            "ORDER BY s.slot_datetime",
-            (int(user_id), dept["id"], date),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def book_appointment(user_id, department, doctor_name, patient_name, patient_phone,
-                     slot_datetime, reason=""):
-    """Claim a slot with one conditional UPDATE.
-
-    The WHERE clause carries the test, so the row is only taken if it was still
-    free when this statement ran. Checking first and then inserting would leave
-    a window where two callers both saw the slot open.
-    """
-    when = (slot_datetime or "").strip().replace("T", " ")
-    if not when:
-        raise ValueError("I need a date and time for the appointment")
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT s.id, s.doctor_name, s.slot_datetime, d.name AS department "
-            "FROM hospital_slots s JOIN hospital_departments d ON d.id = s.department_id "
-            "WHERE s.user_id = ? AND d.name = ? COLLATE NOCASE "
-            "AND datetime(s.slot_datetime) = datetime(?)"
-            + (" AND LOWER(s.doctor_name) = LOWER(?)" if (doctor_name or "").strip() else ""),
-            ([int(user_id), (department or "").strip(), when]
-             + ([(doctor_name or "").strip()] if (doctor_name or "").strip() else [])),
-        ).fetchone()
-        if not row:
-            raise ValueError("I could not find that appointment slot, please check the time")
-        cur = conn.execute(
-            "UPDATE hospital_slots SET status = 'booked' "
-            "WHERE id = ? AND COALESCE(status, 'available') = 'available'",
-            (row["id"],),
-        )
-        if cur.rowcount != 1:
-            raise ValueError("that slot was just taken, please pick another time")
+        if taken:
+            raise ValueError("That slot was just taken. Would you like a different time?")
+        count = conn.execute(
+            "SELECT COUNT(*) FROM hospital_appointments WHERE department_id = ? "
+            "AND date(slot_datetime) = ? AND COALESCE(status, 'confirmed') != 'cancelled'",
+            (department["id"], when[:10]),
+        ).fetchone()[0]
+        if count >= int(department["daily_capacity"] or 16):
+            raise ValueError("Department is fully booked on that date.")
+        if when not in _generated_slots(department, when[:10]):
+            raise ValueError("that time is outside the department schedule")
         appt = conn.execute(
-            "INSERT INTO hospital_appointments (user_id, slot_id, patient_name, "
-            "patient_phone, reason) VALUES (?, ?, ?, ?, ?)",
-            (int(user_id), row["id"], (patient_name or "").strip(),
-             (patient_phone or "").strip(), (reason or "").strip()),
+            "INSERT INTO hospital_appointments (user_id, department_id, slot_datetime, "
+            "patient_name, patient_phone, reason, urgency, patient_email) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (int(user_id), department["id"], when, (patient_name or "").strip(),
+             (patient_phone or "").strip(), (reason or "").strip(), urgency,
+             (patient_email or "").strip() or None),
         )
-        return {"appointment_id": appt.lastrowid, "department": row["department"],
-                "doctor_name": row["doctor_name"],
-                "slot_datetime": row["slot_datetime"],
-                "patient_name": (patient_name or "").strip()}
+        return {"appointment_id": appt.lastrowid, "datetime": when,
+                "department": department["name"]}
+
+
+def due_hospital_reminders(now):
+    """Return confirmed, unreminded appointments inside each user's window."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT a.*, u.business_name, p.reminder_hours_before "
+            "FROM hospital_appointments a "
+            "JOIN users u ON u.id = a.user_id "
+            "LEFT JOIN business_profiles p ON p.user_id = a.user_id "
+            "WHERE a.reminder_sent = 0 AND a.status = 'confirmed'"
+        ).fetchall()
+    due = []
+    for row in rows:
+        appointment_time = row["slot_datetime"]
+        if not appointment_time:
+            continue
+        from datetime import datetime, timedelta
+        try:
+            when = datetime.fromisoformat(str(appointment_time))
+        except ValueError:
+            continue
+        hours = 24 if row["reminder_hours_before"] is None else max(0, int(row["reminder_hours_before"]))
+        if hours == 0 or now <= when <= now + timedelta(hours=hours):
+            item = dict(row)
+            item["slot_datetime"] = appointment_time
+            item["reminder_hours_before"] = hours
+            due.append(item)
+    return due
+
+
+def mark_reminder_sent(appointment_id):
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE hospital_appointments SET reminder_sent = 1 "
+            "WHERE id = ? AND reminder_sent = 0", (int(appointment_id),)
+        )
+        return cur.rowcount == 1
 
 
 # --- restaurant -----------------------------------------------------------
@@ -1135,8 +1485,8 @@ def business_counts(user_id):
                 (uid,)).fetchone()[0],
             "bookings": count("hotel_bookings"),
             "departments": count("hospital_departments"),
-            "slots": count("hospital_slots"),
-            "slots_available": count("hospital_slots", "AND COALESCE(status,'available')='available'"),
+            "slots": 0,
+            "slots_available": 0,
             "appointments": count("hospital_appointments"),
             "tables": count("restaurant_tables"),
             "reservations": count("restaurant_reservations"),
