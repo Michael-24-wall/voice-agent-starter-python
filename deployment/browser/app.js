@@ -1,12 +1,9 @@
 // The page's client. Identical to the one in the JS starter: the
 // audio worklets, the websocket session, and the transcript and event panes.
 const $ = (id) => document.getElementById(id)
-// The rate the API speaks. Both worklets resample, since a browser may
-// ignore the rate an AudioContext asks for.
 const WIRE_RATE = 24_000
 const AGENT = window.AGENT
 
-// Scratch buffers are reused: allocating on the audio thread causes glitches.
 const CAPTURE_WORKLET = `
   class CaptureProcessor extends AudioWorkletProcessor {
     constructor() {

@@ -1536,6 +1536,14 @@ class Handler(BaseHTTPRequestHandler):
                                  business_type)
         token = auth.create_session(user_id)
         print(f"New account: {business} <{email}> ({business_type})", flush=True)
+
+        # Publish the agent immediately so /talk works on first login.
+        try:
+            agent_id = agent_manager.publish_user_agent(user_id)
+            print(f"Auto-published agent for {business}: {agent_id}", flush=True)
+        except Exception as err:
+            print(f"Auto-publish failed for {business}: {err}", flush=True)
+
         # Straight to setup, since an account with no rooms or departments
         # cannot answer its first call.
         self._redirect("/setup", {"Set-Cookie": auth.set_cookie(token)}, status=303,
