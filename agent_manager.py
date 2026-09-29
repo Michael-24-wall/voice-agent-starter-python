@@ -15,6 +15,7 @@ greeting has to name the business that is actually calling.
 import os
 import re
 import sys
+import urllib.parse
 from typing import Any, Optional
 
 import db
@@ -84,6 +85,31 @@ def _fill(value: Any, business_name: str) -> Any:
     return value
 
 
+def _stamp_account(body: dict, user_id: int) -> dict:
+    """Put the owning account on every tool URL.
+
+    A tool call arrives from AssemblyAI's servers with no cookie and no session,
+    so the only way the endpoint knows which account is asking is what this
+    writes into the URL it was published with. Without it the endpoint has to
+    guess from the called number, and a call that carries no number falls back
+    to the oldest account of that vertical, which is how one hotel ends up
+    reading another hotel's rooms.
+    """
+    for tool in body.get("tools", []):
+        url = (tool.get("http") or {}).get("url")
+        if not url or not url.startswith(("http://", "https://")):
+            continue
+        parts = urllib.parse.urlsplit(url)
+        query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+        # Replace rather than append, so a re-publish cannot stack two of these.
+        query = [(k, v) for k, v in query if k != "account"]
+        query.append(("account", str(int(user_id))))
+        tool["http"]["url"] = urllib.parse.urlunsplit(
+            (parts.scheme, parts.netloc, parts.path,
+             urllib.parse.urlencode(query), parts.fragment))
+    return body
+
+
 def build_user_agent(user: dict) -> dict:
     """The request body for POST /v1/agents, for one account."""
     _ensure_tool_base()
@@ -94,33 +120,42 @@ def build_user_agent(user: dict) -> dict:
     body["name"] = name
     if not body.get("tools"):
         raise AgentError(f"the {agent_name_for(user)} config has no tools")
-    return body
+    return _stamp_account(body, user["id"])
 
 
 def publish_user_agent(user_id: int) -> str:
-    """Create this account's agent and remember its id. Returns the id.
+    """Create or update this account's agent. Returns its id.
 
-    This POSTs a new agent rather than updating an existing one, because the id
-    lives on the user row rather than in .env: a hosted deployment has no
-    writable .env, and every account needs its own agent anyway.
+    Updates in place when the account already has one, because re-publishing
+    from the setup page is a normal thing to do and a create every time would
+    strand the previous agent and its prompt in the dashboard.
+
+    The id lives on the user row rather than in .env: a hosted deployment has
+    no writable .env, and every account needs its own agent anyway.
     """
     user = db.get_user_by_id(int(user_id))
     if not user:
         raise AgentError("that account no longer exists")
 
     body = build_user_agent(user)
+    existing = (user.get("agent_id") or "").strip()
     try:
-        created = lib.aai("/agents", method="POST", body=body)
+        if existing:
+            agent = lib.aai(f"/agents/{existing}", method="PUT", body=body)
+            verb = "updated"
+        else:
+            agent = lib.aai("/agents", method="POST", body=body)
+            verb = "published"
     except lib.ApiError as err:
         # The API answers with the reason, which is usually a missing key or a
         # tool URL the API cannot reach.
         raise AgentError(f"AssemblyAI rejected the agent: {err}") from None
 
-    agent_id = (created.get("id") or "").strip()
+    agent_id = (agent.get("id") or "").strip()
     if not agent_id:
         raise AgentError("AssemblyAI returned an agent without an id")
     db.set_user_agent(user["id"], agent_id)
-    print(f'agent: published "{body["name"]}" as {agent_id}', flush=True)
+    print(f'agent: {verb} "{body["name"]}" as {agent_id}', flush=True)
     return agent_id
 
 

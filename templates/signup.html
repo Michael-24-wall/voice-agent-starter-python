@@ -14,6 +14,16 @@
                autocomplete="organization" required autofocus>
       </div>
       <div class="form-field">
+        <label for="business_type">What kind of business is it?</label>
+        <select id="business_type" name="business_type">
+          <option value="hotel" {{TYPE_HOTEL}}>Hotel or guesthouse</option>
+          <option value="hospital" {{TYPE_HOSPITAL}}>Hospital or clinic</option>
+          <option value="restaurant" {{TYPE_RESTAURANT}}>Restaurant</option>
+          <option value="service" {{TYPE_SERVICE}}>Service business</option>
+        </select>
+        <span class="form-hint">This decides the agent you get and the setup page you land on. A hotel can quote rooms, a clinic can offer appointment slots, a restaurant can seat parties, and a service business takes a call summary.</span>
+      </div>
+      <div class="form-field">
         <label for="email">Email</label>
         <input type="email" id="email" name="email" value="{{EMAIL}}"
                autocomplete="email" required>

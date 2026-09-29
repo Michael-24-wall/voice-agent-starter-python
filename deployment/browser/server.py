@@ -28,6 +28,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT))
 
+import agent_manager  # noqa: E402
 import auth  # noqa: E402
 import db  # noqa: E402
 import google_auth  # noqa: E402
@@ -88,7 +89,9 @@ _SLOT = re.compile(r"\{\{([A-Z_]+)\}\}")
 
 # Slots holding HTML built in this file; every other slot gets escaped.
 RAW = {"CONTENT", "NAV", "NUMBERS", "AVAILABLE", "RECENT_CALLS", "CALLS",
-       "TWILIO_BANNER", "ERROR", "PAGER"}
+       "TWILIO_BANNER", "ERROR", "PAGER", "ROOMS", "BOOKINGS", "DEPARTMENTS",
+    "DEPARTMENT_OPTIONS", "SLOT_NOTICE", "SLOTS", "APPOINTMENTS", "TABLES", "RESERVATIONS", "COUNTS",
+       "AGENT_BANNER", "VERTICAL", "CHECKLIST", "GUIDE_HINT"}
 
 # A one-shot message for the toast on the next page. base.html reads the cookie,
 # shows it, and clears it, so it never survives to a second page.
@@ -219,6 +222,7 @@ def nav_for(user) -> str:
     if not user:
         return (
             '<nav class="nav-links" id="primary-nav">'
+            '<a href="/guide">Guide</a>'
             '<a href="/login">Sign in</a>'
             '<a href="/signup">Sign up</a>'
             "</nav>"
@@ -227,11 +231,17 @@ def nav_for(user) -> str:
             "</div>"
         )
     name = esc(user["business_name"])
+    # A service business has nothing to set up, so its setup page is where the
+    # agent and its numbers live; the other three need it before a call can be
+    # answered, so it sits next to Dashboard.
+    setup_link = ('<a href="/setup">Setup</a>' if vertical_of(user) != "service" else "")
     return (
         '<nav class="nav-links" id="primary-nav">'
         '<a href="/dashboard">Dashboard</a>'
+        + setup_link +
         '<a href="/numbers">Numbers</a>'
         '<a href="/calls">Calls</a>'
+        '<a href="/guide">Guide</a>'
         '<a href="/settings/answering">Settings</a>'
         "</nav>"
         '<div class="header-right">'
@@ -276,6 +286,214 @@ def error_box(message):
     return note(esc(message), "err") if message else ""
 
 
+# --- vertical table rows --------------------------------------------------
+#
+# One fragment per list on the setup pages. Every cell is escaped here, because
+# these slots are inserted as trusted HTML and a guest name typed in by a caller
+# is exactly the kind of value that must not reach the page unescaped.
+
+def _row(cells, attrs=""):
+    return f"<tr{attrs}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+
+
+def _delete_form(action, row_id, label):
+    """A delete control that posts to its own route.
+
+    A button rather than a link, because the route is POST-only: a GET would
+    be a prefetchable link, and a crawler or a browser prefetch would delete
+    somebody's room.
+    """
+    return (
+        f'<form method="post" action="{action}" class="inline-form">'
+        f'<input type="hidden" name="id" value="{int(row_id)}">'
+        f'<button class="btn btn-danger btn-sm" type="submit">{esc(label)}</button>'
+        "</form>"
+    )
+
+
+def room_rows(rooms):
+    if not rooms:
+        return empty_state(
+            "&#127968;",
+            "No rooms yet",
+            "Add a room and the agent can start quoting availability on a call.",
+        )
+    rows = [
+        _row([
+            f"<strong>{esc(r['room_number'])}</strong>",
+            esc(r["room_type"] or "standard"),
+            esc(f"${r['price_per_night']:.0f}") if r["price_per_night"] is not None else "",
+            esc(r["capacity"] or ""),
+            esc(r["amenities"] or ""),
+            _delete_form("/setup/hotel/rooms/delete", r["id"], "Delete"),
+        ])
+        for r in rooms
+    ]
+    return ('<div class="table-wrap"><table><thead><tr>'
+            "<th>Room</th><th>Type</th><th>Nightly</th><th>Sleeps</th>"
+            "<th>Amenities</th><th></th></tr></thead><tbody>"
+            + "".join(rows) + "</tbody></table></div>")
+
+
+def booking_rows(bookings):
+    if not bookings:
+        return empty_state("&#128197;", "No bookings yet",
+                           "Bookings land here when the agent books a room on a call.")
+    rows = [
+        _row([
+            esc(b.get("room_number") or ""),
+            esc(b.get("guest_name") or ""),
+            esc(b.get("guest_phone") or ""),
+            f"{esc(b.get('check_in') or '')} to {esc(b.get('check_out') or '')}",
+            status_badge(b.get("status") or "confirmed"),
+        ])
+        for b in bookings
+    ]
+    return ('<div class="table-wrap"><table><thead><tr>'
+            "<th>Room</th><th>Guest</th><th>Phone</th><th>Stay</th><th>Status</th>"
+            "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+
+
+def department_rows(departments):
+    if not departments:
+        return empty_state("&#128736;", "No departments yet",
+                           "Add a department, then add appointment slots to it.")
+    rows = [
+        _row([
+            f"<strong>{esc(d['name'])}</strong>",
+            esc(d["description"] or ""),
+        ])
+        for d in departments
+    ]
+    return ('<div class="table-wrap"><table><thead><tr>'
+            "<th>Department</th><th>Notes</th></tr></thead><tbody>"
+            + "".join(rows) + "</tbody></table></div>")
+
+
+def slot_rows(slots):
+    if not slots:
+        return empty_state("&#128197;", "No slots yet",
+                           "Add appointment times, and the agent can offer them on a call.")
+    rows = [
+        _row([
+            esc(s.get("department") or ""),
+            esc(s.get("doctor_name") or ""),
+            esc(s.get("slot_datetime") or ""),
+            esc(f"{s.get('duration_minutes') or 30} min"),
+            status_badge(s.get("status") or "available"),
+            _delete_form("/setup/hospital/slots/delete", s["id"], "Delete"),
+        ])
+        for s in slots
+    ]
+    return ('<div class="table-wrap"><table><thead><tr>'
+            "<th>Department</th><th>Doctor</th><th>When</th><th>Length</th>"
+            "<th>Status</th><th></th></tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+
+
+def appointment_rows(appointments):
+    if not appointments:
+        return empty_state("&#128100;", "No appointments yet",
+                           "Appointments the agent books will be listed here.")
+    rows = [
+        _row([
+            esc(a.get("patient_name") or ""),
+            esc(a.get("department") or ""),
+            esc(a.get("doctor_name") or ""),
+            esc(a.get("slot_datetime") or ""),
+            status_badge(a.get("status") or "confirmed"),
+        ])
+        for a in appointments
+    ]
+    return ('<div class="table-wrap"><table><thead><tr>'
+            "<th>Patient</th><th>Department</th><th>Doctor</th><th>When</th>"
+            "<th>Status</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+
+
+def table_rows(tables):
+    if not tables:
+        return empty_state("&#127978;", "No tables yet",
+                           "Add a table and the agent can start checking availability.")
+    rows = [
+        _row([
+            f"<strong>{esc(t['table_number'])}</strong>",
+            esc(t["capacity"] or ""),
+            status_badge(t.get("status") or "available"),
+            _delete_form("/setup/restaurant/tables/delete", t["id"], "Delete"),
+        ])
+        for t in tables
+    ]
+    return ('<div class="table-wrap"><table><thead><tr>'
+            "<th>Table</th><th>Seats</th><th>Status</th><th></th></tr></thead><tbody>"
+            + "".join(rows) + "</tbody></table></div>")
+
+
+def reservation_rows(reservations):
+    if not reservations:
+        return empty_state("&#127860;", "No reservations yet",
+                           "Reservations the agent books will be listed here.")
+    rows = [
+        _row([
+            esc(v.get("guest_name") or ""),
+            esc(v.get("table_number") or ""),
+            esc(v.get("party_size") or ""),
+            esc(v.get("reservation_datetime") or ""),
+            status_badge(v.get("status") or "confirmed"),
+        ])
+        for v in reservations
+    ]
+    return ('<div class="table-wrap"><table><thead><tr>'
+            "<th>Guest</th><th>Table</th><th>Party</th><th>When</th><th>Status</th>"
+            "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+
+
+def agent_banner(user):
+    """Shown on every setup page: whether this account has an agent yet."""
+    agent_id = agent_manager.get_user_agent(user["id"])
+    if not agent_id:
+        return note(
+            "Your agent is not activated yet. Add what you sell, then activate it "
+            "so calls can be answered.", "warn")
+    return note(f"Agent <code>{esc(agent_id)}</code> is live and answering calls "
+                f"as {esc(user['business_name'])}.", "ok")
+
+
+def vertical_summary(user) -> str:
+    """The vertical's own section on the dashboard.
+
+    A hotel has rooms and bookings, a clinic has departments and slots, a
+    restaurant has tables and reservations, and a service business has none of
+    them, so it gets an empty string rather than an empty table.
+    """
+    vertical = vertical_of(user)
+    uid = user["id"]
+    counts = db.business_counts(uid)
+
+    if vertical == "hotel":
+        stats = [("Rooms", "rooms"), ("Room types", "room_types"), ("Bookings", "bookings")]
+        body = (f'<h2 class="section-title">Recent bookings</h2>'
+                + booking_rows(db.list_bookings(uid)))
+        link = '<a class="btn btn-primary btn-sm" href="/setup/hotel/rooms">Manage rooms</a>'
+    elif vertical == "hospital":
+        stats = [("Departments", "departments"), ("Open slots", "slots_available"),
+                 ("Appointments", "appointments")]
+        body = (f'<h2 class="section-title">Recent appointments</h2>'
+                + appointment_rows(db.list_appointments(uid)))
+        link = '<a class="btn btn-primary btn-sm" href="/setup/hospital/slots">Manage slots</a>'
+    elif vertical == "restaurant":
+        stats = [("Tables", "tables"), ("Reservations", "reservations")]
+        body = (f'<h2 class="section-title">Recent reservations</h2>'
+                + reservation_rows(db.list_reservations(uid)))
+        link = ('<a class="btn btn-primary btn-sm" href="/setup/restaurant/tables">'
+                "Manage tables</a>")
+    else:
+        return ""
+
+    return (f'<section class="card vertical-card">'
+            f'<div class="card-head"><h2 class="section-title">'
+            f'{esc(db.BUSINESS_TYPE_LABELS[vertical])}</h2>{link}</div>'
+            + counts_markup(counts, stats) + body + "</section>")
+
+
 def empty_state(icon, title, body, action=""):
     """The centered placeholder shown when a list has nothing in it."""
     return (
@@ -303,6 +521,32 @@ def badge(text, kind):
 
 
 URGENCY_BADGE = {"high": "danger", "medium": "warning", "low": "neutral"}
+
+# Status words the vertical tables carry, mapped to badge colours. Anything
+# unlisted shows as neutral rather than guessing.
+STATUS_BADGE = {
+    "available": "success", "confirmed": "success", "booked": "info",
+    "occupied": "warning", "pending": "warning", "maintenance": "warning",
+    "cancelled": "danger", "no_show": "danger", "out_of_service": "danger",
+}
+
+
+def status_badge(text):
+    return badge(text or "", STATUS_BADGE.get((text or "").strip().lower(), "neutral"))
+
+
+def counts_markup(counts: dict, pairs) -> str:
+    """The stat grid on a setup page, from a business_counts() dict.
+
+    Built here rather than in the template so the same three numbers render the
+    same way whichever vertical is looking at them.
+    """
+    cells = "".join(
+        f'<div class="card card-hover"><div class="stat-label">{esc(label)}</div>'
+        f'<div class="card-value">{esc(counts.get(key, 0))}</div></div>'
+        for label, key in pairs
+    )
+    return f'<div class="stat-grid">{cells}</div>'
 
 
 def numbers_table(user_id):
@@ -426,39 +670,97 @@ def calls_table(user_id, limit=None, offset=0, since=None, with_callback=False,
     return f'{head}<tbody>{"".join(out)}</tbody></table>'
 
 
+_TICK = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" '
+         'stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>')
+
+
 def twilio_banner(user, message="", kind="warn"):
-    """Connect state, or the reason it is not connected."""
+    """The onboarding card a new account needs, or a compact card once connected.
+
+    A flash written by a redirect (a number bound, a connect that failed) still
+    wins, because it is the answer to whatever the person just did.
+    """
     if message:
         return note(message, kind)
-    conn = db.get_twilio_connection(user["id"])
-    if conn:
-        return note(
-            f'Connected as <span class="mono">{esc(conn["account_sid"])}</span> &middot; '
-            '<a href="/numbers">Manage numbers</a>', "ok")
-    if not tc.connect_configured():
-        return note(
-            "<b>Twilio Connect isn't configured on this deployment yet.</b> "
-            "An admin has to create a Twilio Connect App, which needs an upgraded "
-            "Twilio account, and set TWILIO_CONNECT_APP_SID in .env. "
-            "The full Connect flow is already coded and ready to activate."
-            '<div class="row"><a class="btn btn-primary" href="/numbers">'
-            "See your numbers</a></div>"
-            f'<p>{esc(CONNECT_NOT_CONFIGURED)}</p>',
-            kind)
-    return note(
-        "<b>Connect your Twilio account</b> to start receiving calls. You'll be "
-        "redirected to Twilio to sign up or log in, and Twilio bills you directly "
-        "for call usage."
-        '<div class="row"><a class="btn btn-primary" href="/connect/twilio">'
-        "Connect Twilio</a></div>",
-        kind)
-    return note(
-        "<b>Connect your Twilio account</b> to receive calls. You'll be "
-        "redirected to Twilio to sign up or log in. Twilio bills you directly "
-        "for call usage."
-        '<div class="row" style="margin-top:12px">'
-        '<a class="btn primary" href="/connect/twilio">Connect Twilio</a></div>',
-        kind)
+
+    if db.get_twilio_connection(user["id"]):
+        return (
+            '<div class="card onboard onboard-done">'
+            '<span class="onboard-check" aria-hidden="true">' + _TICK + "</span>"
+            '<div class="onboard-head-body">'
+            '<div class="card-title" style="margin:0">Twilio connected</div>'
+            '<p class="muted" style="margin:0">Your CallDesk number is live. '
+            'Calls will appear below. <a href="/guide">View guide</a></p>'
+            "</div></div>"
+        )
+
+    # Connect can't work on a deployment with no Connect App, so the button is
+    # shown inert and the admin note explains why, rather than a link that 400s.
+    configured = tc.connect_configured()
+    if configured:
+        connect = ('<a class="btn btn-primary" href="/connect/twilio">Connect Twilio</a>')
+    else:
+        connect = ('<span class="btn btn-primary" aria-disabled="true" '
+                   'title="Twilio Connect is not configured on this deployment">'
+                   "Connect Twilio</span>")
+    admin_note = "" if configured else note(esc(CONNECT_NOT_CONFIGURED), "warn")
+    steps = "".join(
+        f'<li><span class="onboard-num">{i}</span>'
+        f'<span class="onboard-step-text">{text}</span></li>'
+        for i, text in enumerate((
+            "Create a free Twilio account",
+            "Buy a phone number",
+            "Connect it to CallDesk",
+        ), start=1)
+    )
+    return (
+        '<div class="card onboard">'
+        '<h2 class="onboard-title">Get your CallDesk number in 5 minutes</h2>'
+        '<p class="muted onboard-lede">Connect your Twilio account to start '
+        "receiving calls. We'll walk you through it step by step.</p>"
+        f'<ol class="onboard-steps">{steps}</ol>'
+        '<div class="onboard-actions">'
+        '<a class="btn btn-secondary" href="/guide">Read the full guide</a>'
+        f"{connect}</div>"
+        f"{admin_note}"
+        "</div>"
+    )
+
+
+def setup_checklist(user) -> str:
+    """How far through setup this account is. Empty once all five are done.
+
+    Each row is derived from what already exists, so the checklist cannot drift
+    from the state it describes. The one item with no row of its own is the
+    account itself, which is true by definition for anyone reading this page.
+    """
+    numbers = db.list_phone_numbers(user["id"])
+    items = [
+        ("Create a CallDesk account", True, "/dashboard"),
+        ("Connect Twilio", bool(db.get_twilio_connection(user["id"])), "/numbers"),
+        ("Bind a phone number", bool(numbers), "/numbers"),
+        ("Set your answering mode",
+         any(n.get("answering_mode") for n in numbers), "/settings/answering"),
+        ("Test with a call", db.count_calls(user["id"]) > 0, "/talk"),
+    ]
+    if all(done for _, done, _ in items):
+        return ""
+    rows = ""
+    for label, done, href in items:
+        cls = " is-done" if done else ""
+        box = "&#10003;" if done else ""
+        go = "" if done else f'<a class="check-go" href="{href}">Do it</a>'
+        rows += (f'<li class="check-row{cls}">'
+                 f'<span class="check-box" aria-hidden="true">{box}</span>'
+                 f'<span class="check-text">{label}</span>{go}</li>')
+    remaining = sum(1 for _, done, _ in items if not done)
+    return (
+        '<div class="card onboard">'
+        '<div class="row-between" style="margin-bottom:12px">'
+        '<div class="card-title" style="margin:0">Finish setting up</div>'
+        f'<span class="badge">{remaining} left</span></div>'
+        f'<ol class="checklist">{rows}</ol></div>'
+    )
 
 
 AGENT = None
@@ -468,11 +770,59 @@ PAGE = ""
 # a stray POST with 405 instead of a misleading 404. /signup, /login, /logout,
 # /numbers/bind, /settings/answering, /calls/callback and /tool/send_summary
 # are deliberately absent: they are real POST routes.
-GET_ONLY = {"/", "/dashboard", "/numbers", "/calls", "/talk",
+GET_ONLY = {"/", "/dashboard", "/numbers", "/calls", "/talk", "/guide",
+            "/setup", "/setup/hospital", "/setup/hotel/rooms",
+            "/setup/hospital/departments", "/setup/hospital/slots",
+            "/setup/restaurant/tables",
             "/connect/twilio", "/connect/twilio/callback",
             "/auth/google", "/auth/google/callback",
             "/twiml/fallback", "/twiml/outbound", "/app.js",
             "/token", "/agent", "/static/style.css"}
+
+
+# --- verticals ------------------------------------------------------------
+
+# Which setup page an account's business_type gets. There is no cross-vertical
+# navigation, so a hotel cannot reach the restaurant table form.
+SETUP_TEMPLATE = {
+    "service": "setup_service.html",
+    "hotel": "setup_hotel.html",
+    "hospital": "setup_hospital.html",
+    "restaurant": "setup_restaurant.html",
+}
+
+# The vertical an account is, always normalized, so a row written before the
+# column existed still gets a page.
+def vertical_of(user) -> str:
+    return db.normalize_business_type((user or {}).get("business_type"))
+
+
+def type_options(selected="service") -> dict:
+    """One 'selected' attribute on the right signup option, none on the rest.
+
+    A form that failed validation has to come back showing what the person
+    chose, which is the whole point of keeping the value across the redirect.
+    """
+    chosen = db.normalize_business_type(selected)
+    return {f"TYPE_{name.upper()}": "selected" if name == chosen else ""
+            for name in db.BUSINESS_TYPES}
+
+
+def setup_template_for(user) -> str:
+    return SETUP_TEMPLATE[vertical_of(user)]
+
+
+# POST /tool/<name> -> the db call behind one agent tool. The handler wraps
+# whatever these return in {"ok": true, "data": ...} and turns a ValueError
+# into {"ok": false, "error": ...}, so a tool can raise a message written for
+# the caller and the agent will read it out.
+TOOL_CHECK_AVAILABILITY = "check_availability"
+TOOL_BOOK_ROOM = "book_room"
+TOOL_CHECK_SLOTS = "check_slots"
+TOOL_BOOK_APPOINTMENT = "book_appointment"
+TOOL_CHECK_TABLES = "check_tables"
+TOOL_BOOK_TABLE = "book_table"
+
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -555,12 +905,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(502, b'{"error":"token request failed"}', "application/json")
             return
         if path == "/agent":
-            try:
-                agent = aai(f"/agents/{AGENT['id']}")
-                self._send(200, json.dumps(public_agent(agent)).encode(), "application/json")
-            except ApiError as err:
-                print(err)
-                self._send(502, b'{"error":"could not load the agent"}', "application/json")
+            self._agent_for_user()
             return
         if path == "/app.js":
             self._send(200, (HERE / "app.js").read_bytes(), "text/javascript")
@@ -574,7 +919,7 @@ class Handler(BaseHTTPRequestHandler):
                        {"Cache-Control": "public, max-age=300"})
             return
         if path == "/talk":
-            self._html(PAGE.encode())
+            self._talk_page()
             return
 
         # --- TwiML that Twilio fetches ---
@@ -612,11 +957,18 @@ class Handler(BaseHTTPRequestHandler):
                             BUSINESS_NAME=self._one("business_name"),
                             MOBILE_NUMBER=self._one("mobile_number"),
                             GOOGLE_MARK=GOOGLE_MARK,
-                            GOOGLE_HINT=google_hint()))
+                            GOOGLE_HINT=google_hint(),
+                            **type_options(self._one("business_type"))))
             return
 
         if path == "/auth/google":
             self._google_start()
+            return
+
+        # Public on purpose: a business owner has to be able to read what this
+        # involves before deciding to sign up or hand over a Twilio account.
+        if path == "/guide":
+            self._html(page("guide.html", "Get connected", nav_for(self._user())))
             return
 
         if path == "/auth/google/callback":
@@ -625,6 +977,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/dashboard":
             self._dashboard()
+            return
+        # Every setup page. /setup picks the one this account's vertical uses;
+        # the others are the same page reached by an explicit sub-path.
+        if path in ("/setup", "/setup/hospital", "/setup/hotel/rooms", "/setup/hospital/departments",
+                    "/setup/hospital/slots", "/setup/restaurant/tables"):
+            setup_user = self._require_user()
+            if not setup_user:
+                return
+            self._setup_page(setup_user, path)
             return
         if path == "/numbers":
             self._numbers()
@@ -647,6 +1008,72 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- page handlers --------------------------------------------------
 
+    NO_AGENT_NOTICE = (
+        "You haven't set up your business yet. Complete your setup to get a "
+        "personalized agent."
+    )
+
+    def _resolve_voice_agent(self):
+        """Which agent this session talks to, and what to tell them about it.
+
+        The per-account agent wins. A hotel on its own published agent must
+        never be handed the deployment-wide default, which is a service
+        business and would answer a caller as one.
+
+        Three states, and they are genuinely different:
+          own      the account has activated an agent
+          pending  signed in, nothing published yet, so the global one answers
+          visitor  not signed in, so there is nobody to personalise for
+        """
+        user = self._user()
+        own = (user["agent_id"] or "").strip() if user else ""
+        if own:
+            return {"id": own, "own": True, "notice": None}
+        return {"id": AGENT["id"], "own": False,
+                "notice": self.NO_AGENT_NOTICE if user else None}
+
+    def _agent_for_user(self) -> None:
+        """The agent the voice page will open a session with.
+
+        app.js takes the id straight off this payload and puts it in
+        session.update, so this is the one place that decides whose voice an
+        inbound call reaches.
+        """
+        chosen = self._resolve_voice_agent()
+        try:
+            agent = aai(f"/agents/{chosen['id']}")
+        except ApiError as err:
+            print(err)
+            self._send(502, b'{"error":"could not load the agent"}', "application/json")
+            return
+        payload = public_agent(agent)
+        # The starter's app.js only reads `id`, so an extra key is inert there
+        # and this is where the page learns whether it is on the right agent.
+        payload["notice"] = chosen["notice"]
+        payload["personalized"] = chosen["own"]
+        self._send(200, json.dumps(payload).encode(), "application/json")
+
+    def _talk_page(self) -> None:
+        """/talk, with the agent named for whoever is signed in.
+
+        The page is the starter's, so only the two agent slots and the notice
+        change between accounts. app.js reads window.AGENT for `id` and `name`
+        and nothing else, so those two are all that gets injected: the system
+        prompt has no business being in the page source on every page load.
+        """
+        chosen = self._resolve_voice_agent()
+        user = self._user()
+        name = AGENT["name"]
+        if chosen["own"]:
+            name = f"{user['business_name']} agent"
+        banner = note(esc(chosen["notice"]), "warn") if chosen["notice"] else ""
+
+        injected = json.dumps({"id": chosen["id"], "name": name}).replace("<", "\\u003c")
+        self._html(PAGE.replace("{{AGENT_NAME}}", esc(name))
+                       .replace("{{AGENT_JSON}}", injected)
+                       .replace("{{AGENT_NOTICE}}", banner)
+                       .encode())
+
     def _dashboard(self) -> None:
         user = self._require_user()
         if not user:
@@ -663,12 +1090,15 @@ class Handler(BaseHTTPRequestHandler):
         self._html(page(
             "dashboard.html", "Dashboard", nav_for(user),
             BUSINESS_NAME=user["business_name"], EMAIL=user["email"],
+            BUSINESS_TYPE_LABEL=db.BUSINESS_TYPE_LABELS[vertical_of(user)],
             TWILIO_BANNER=twilio_banner(user, message, kind),
             NUMBERS=numbers_table(user["id"]),
             RECENT_CALLS=calls_table(user["id"], limit=10),
             CALLS_TODAY=db.count_calls(user["id"], since=utc_day()),
             CALLS_WEEK=db.count_calls(user["id"], since=utc_day(days_ago=7)),
             NUMBERS_COUNT=len(numbers),
+            VERTICAL=vertical_summary(user),
+            CHECKLIST=setup_checklist(user),
         ))
 
     def _numbers(self) -> None:
@@ -688,10 +1118,16 @@ class Handler(BaseHTTPRequestHandler):
                 "ok")
         elif not tc.connect_configured():
             banner = note(esc(CONNECT_NOT_CONFIGURED), "warn")
+        # Only when there is nothing to read on this page yet, which is the
+        # whole point of the link.
+        guide = "" if conn else (
+            '<p class="muted" style="margin:0 0 16px">'
+            'Not sure how? <a href="/guide">Read the guide</a></p>')
         self._html(page(
             "numbers.html", "Phone numbers", nav_for(user),
             ERROR=error_box(self._one("error")) if not conn else "",
             TWILIO_BANNER=banner,
+            GUIDE_HINT=guide,
             NUMBERS=numbers_table(user["id"]),
             AVAILABLE=available,
         ))
@@ -802,6 +1238,35 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/tool/send_summary":
             self._handle_send_summary()
             return
+        # The vertical tools. All of them are POST-only, are called by
+        # AssemblyAI rather than a browser, and share one envelope.
+        vertical_tools = {
+            "/tool/check_availability": self._tool_check_availability,
+            "/tool/book_room": self._tool_book_room,
+            "/tool/check_slots": self._tool_check_slots,
+            "/tool/book_appointment": self._tool_book_appointment,
+            "/tool/check_tables": self._tool_check_tables,
+            "/tool/book_table": self._tool_book_table,
+        }
+        if path in vertical_tools:
+            vertical_tools[path]()
+            return
+
+        # The inventory pages are both a form to read and a form to post, so
+        # they are exempt from the GET_ONLY 405 below. /setup itself is not in
+        # this list, which keeps it read-only.
+        setup_posts = {
+            "/setup/hotel/rooms": self._add_room,
+            "/setup/hotel/rooms/delete": self._delete_room,
+            "/setup/hospital/departments": self._add_department,
+            "/setup/hospital/slots": self._add_slot,
+            "/setup/hospital/slots/delete": self._delete_slot,
+            "/setup/restaurant/tables": self._add_table,
+            "/setup/restaurant/tables/delete": self._delete_table,
+        }
+        if path in setup_posts:
+            setup_posts[path](self._form())
+            return
 
         if path in GET_ONLY:
             self.send_response(405)
@@ -831,6 +1296,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/calls/callback":
             self._call_back(form)
+            return
+
+        if path == "/setup/publish-agent":
+            self._publish_agent()
             return
 
         self._send(404, b'{"error":"not found"}', "application/json")
@@ -898,7 +1367,11 @@ class Handler(BaseHTTPRequestHandler):
         password = form.get("password") or ""
         business = (form.get("business_name") or "").strip()
         mobile = (form.get("mobile_number") or "").strip()
+        # A public form, so an unknown value falls back to a service business
+        # rather than being rejected: normalize_business_type decides.
+        business_type = db.normalize_business_type(form.get("business_type"))
         keep = {"EMAIL": email, "BUSINESS_NAME": business, "MOBILE_NUMBER": mobile}
+        keep.update(type_options(business_type))
         if not (email and password and business):
             self._fail_form("signup.html", "Sign up", nav_for(None),
                             "All of business name, email, and password are required.",
@@ -912,10 +1385,13 @@ class Handler(BaseHTTPRequestHandler):
             self._fail_form("signup.html", "Sign up", nav_for(None),
                             "That email is already registered. Try logging in.", keep)
             return
-        user_id = db.create_user(email, auth.hash_password(password), business, mobile)
+        user_id = db.create_user(email, auth.hash_password(password), business, mobile,
+                                 business_type)
         token = auth.create_session(user_id)
-        print(f"New account: {business} <{email}>", flush=True)
-        self._redirect("/dashboard", {"Set-Cookie": auth.set_cookie(token)}, status=303,
+        print(f"New account: {business} <{email}> ({business_type})", flush=True)
+        # Straight to setup, since an account with no rooms or departments
+        # cannot answer its first call.
+        self._redirect("/setup", {"Set-Cookie": auth.set_cookie(token)}, status=303,
                        flash=f"Welcome to CallDesk, {business}.")
 
     def _login(self, form) -> None:
@@ -934,6 +1410,11 @@ class Handler(BaseHTTPRequestHandler):
         user = self._require_user()
         if not user:
             return
+        agent_id = agent_manager.get_user_agent(user["id"])
+        if not agent_id:
+            self._redirect(
+                "/setup?error=Activate+your+agent+before+binding+a+number.")
+            return
         number = (form.get("phone_number") or "").strip()
         if not number:
             self._redirect("/numbers?error=Enter+a+phone+number.")
@@ -943,12 +1424,12 @@ class Handler(BaseHTTPRequestHandler):
             self._redirect("/connect/twilio")
             return
         try:
-            tc.bind_number_to_agent(conn["account_sid"], number, AGENT["id"])
+            tc.bind_number_to_agent(conn["account_sid"], number, agent_id)
         except tc.TwilioError as err:
             self._redirect("/numbers?error=" + urllib.parse.quote(str(err)[:250]))
             return
-        db.add_phone_number(user["id"], number, agent_id=AGENT["id"])
-        print(f"Bound {number} to {AGENT['id']} for {user['business_name']}", flush=True)
+        db.add_phone_number(user["id"], number, agent_id=agent_id)
+        print(f"Bound {number} to {agent_id} for {user['business_name']}", flush=True)
         self._redirect(f"/dashboard?ok={urllib.parse.quote('Bound ' + number)}",
                        flash=f"{number} is now answered by CallDesk.")
 
@@ -1053,14 +1534,421 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(200, json.dumps({"sent": True}).encode(), "application/json")
 
+    # --- agent tools for the vertical availability endpoints --------------
+    #
+    # Every one of these answers the same envelope, because the agent has to
+    # tell a caller either that it worked or why it did not:
+    #
+    #     {"ok": true,  "data": {...}}
+    #     {"ok": false, "error": "a sentence the agent can read out"}
+    #
+    # The error is always HTTP 200. A tool that answers 4xx is treated as a
+    # dead endpoint, and the agent then tells the caller the system is down
+    # instead of reading the reason.
+
+    def _tool_json(self, payload: dict, status: int = 200) -> None:
+        self._send(status, json.dumps(payload).encode(), "application/json")
+
+    def _tool_ok(self, data: dict) -> None:
+        self._tool_json({"ok": True, "data": data})
+
+    def _tool_fail(self, message: str) -> None:
+        self._tool_json({"ok": False, "error": message or "something went wrong"})
+
+    def _tool_args(self) -> Optional[dict]:
+        """The JSON body AssemblyAI posted, or None after answering."""
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            args = json.loads(raw)
+        except json.JSONDecodeError:
+            self._tool_fail("I could not read that request. Please try again.")
+            return None
+        if not isinstance(args, dict):
+            self._tool_fail("I could not read that request. Please try again.")
+            return None
+        return args
+
+    def _tool_user(self, args: dict, business_type: str) -> Optional[dict]:
+        """The account a tool call belongs to.
+
+        Three ways to know, best first:
+
+        1. The `account` query parameter the agent was published with. That is
+           the agent's own owner, so it is always right, and it is the only one
+           that still works when the call carries no number.
+        2. The number that received the call, when the model passed one along.
+        3. The oldest account of that vertical, which is what keeps a
+           single-tenant demo working and is logged every time so the fallback
+           is never silent.
+
+        Whatever identifies the account, it has to be the right vertical: a
+        number bound to a different kind of business must not read or write
+        this vertical's tables.
+        """
+        claimed = self._one("account")
+        if claimed and str(claimed).isdigit():
+            owner = db.get_user_by_id(int(claimed))
+            if owner and vertical_of(owner) == business_type:
+                return owner
+            # A published agent pointing at an account of another vertical is a
+            # publishing bug, not a caller error, so say nothing to the caller.
+            print(f"tool: agent claims account {claimed} for {business_type}, "
+                  "which it is not; ignoring it", flush=True)
+            self._tool_fail("this number is not set up for that service")
+            return None
+
+        called = ""
+        for key in ("to", "to_number", "phone_number", "called_number"):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                called = value.strip()
+                break
+
+        owner = db.owner_of_number(called) if called else None
+        user = db.get_user_by_id(owner["user_id"]) if owner else None
+        if user:
+            if vertical_of(user) != business_type:
+                # A number bound to a different kind of business must not read
+                # or write this vertical's tables.
+                self._tool_fail("this number is not set up for that service")
+                return None
+            return user
+
+        user = db.first_user_of_type(business_type)
+        if not user:
+            self._tool_fail(f"no {business_type} account has been set up yet")
+            return None
+        print(f"tool: no {called or 'to number'} on the call, answered for "
+              f"{user['business_name']} (first {business_type} account)", flush=True)
+        return user
+
+    def _tool_run(self, business_type: str, work) -> None:
+        """Run one tool body with the shared envelope around it."""
+        args = self._tool_args()
+        if args is None:
+            return
+        user = self._tool_user(args, business_type)
+        if user is None:
+            return
+        try:
+            self._tool_ok(work(args, user))
+        except ValueError as err:
+            # db raises these with a message meant to be spoken.
+            print(f"tool: {business_type} rejected a call: {err}", flush=True)
+            self._tool_fail(str(err))
+        except Exception as err:  # never leak a traceback to the agent
+            print(f"tool: {business_type} failed: {err!r}", flush=True)
+            self._tool_fail("our system could not complete that just now. "
+                            "Please call back in a moment.")
+
+    # hotel
+
+    def _tool_check_availability(self) -> None:
+        def work(args, user):
+            rooms = db.find_available_rooms(
+                user["id"], args.get("check_in"), args.get("check_out"),
+                args.get("room_type"))
+            return {
+                "available": bool(rooms),
+                "room_count": len(rooms),
+                "rooms": [{"room_number": r["room_number"], "room_type": r["room_type"],
+                           "price_per_night": r["price_per_night"],
+                           "capacity": r["capacity"], "amenities": r["amenities"] or ""}
+                          for r in rooms],
+            }
+        self._tool_run("hotel", work)
+
+    def _tool_book_room(self) -> None:
+        def work(args, user):
+            return db.book_room(
+                user["id"], args.get("room_number"), args.get("guest_name"),
+                args.get("guest_phone"), args.get("check_in"), args.get("check_out"))
+        self._tool_run("hotel", work)
+
+    # hospital
+
+    def _tool_check_slots(self) -> None:
+        def work(args, user):
+            print(f"check_slots {json.dumps(args, sort_keys=True)}", flush=True)
+            slots = db.find_available_slots(
+                user["id"], args.get("department"), args.get("date"))
+            result = {"slots": [
+                {"slot_id": s["id"], "doctor": s["doctor_name"] or "",
+                 "datetime": s["slot_datetime"],
+                 "duration": s["duration_minutes"]}
+                for s in slots
+            ]}
+            print(f"check_slots result {json.dumps(result, sort_keys=True)}", flush=True)
+            return result
+        self._tool_run("hospital", work)
+
+    def _tool_book_appointment(self) -> None:
+        def work(args, user):
+            return db.book_appointment(
+                user["id"], args.get("department"), args.get("doctor_name"),
+                args.get("patient_name"), args.get("patient_phone"),
+                args.get("slot_datetime"), args.get("reason"))
+        self._tool_run("hospital", work)
+
+    # restaurant
+
+    def _tool_check_tables(self) -> None:
+        def work(args, user):
+            tables = db.find_available_tables(
+                user["id"], args.get("datetime"), args.get("party_size"))
+            return {
+                "available": bool(tables),
+                "table_count": len(tables),
+                "tables": [{"table_number": t["table_number"], "capacity": t["capacity"]}
+                           for t in tables],
+            }
+        self._tool_run("restaurant", work)
+
+    def _tool_book_table(self) -> None:
+        def work(args, user):
+            return db.book_table(
+                user["id"], args.get("table_number"), args.get("guest_name"),
+                args.get("guest_phone"), args.get("party_size"),
+                args.get("reservation_datetime"))
+        self._tool_run("restaurant", work)
+
+    def _setup_page(self, user, path) -> None:
+        """Render the setup page for this account's vertical.
+
+        One method for all four, because an account only ever sees its own: the
+        template comes from business_type, and /setup/hotel/rooms on a
+        restaurant account is refused rather than rendered.
+        """
+        vertical = vertical_of(user)
+        if path != "/setup" and vertical != path.split("/")[2]:
+            self._redirect("/setup", flash="That setup page belongs to a different "
+                           "kind of business.", kind="err")
+            return
+
+        title = "Setup"
+        agent_id = agent_manager.get_user_agent(user["id"])
+        values = {
+            "AGENT_BANNER": agent_banner(user),
+            "AGENT_ID": esc(agent_id or ""),
+            "BUSINESS_NAME": user["business_name"],
+            "BUSINESS_TYPE_LABEL": db.BUSINESS_TYPE_LABELS[vertical],
+            # The same button publishes again, so an owner who changes a price
+            # or a room can refresh the agent without hunting for a second one.
+            "ACTIVATE_LABEL": "Update agent" if agent_id else "Activate agent",
+        }
+
+        if vertical == "hotel":
+            title = "Rooms and bookings"
+            values.update(
+                COUNTS=counts_markup(db.business_counts(user["id"]),
+                                      [("Rooms", "rooms"), ("Room types", "room_types"),
+                                       ("Bookings", "bookings")]),
+                ROOMS=room_rows(db.list_rooms(user["id"])),
+                BOOKINGS=booking_rows(db.list_bookings(user["id"])),
+            )
+        elif vertical == "hospital":
+            title = "Departments and slots"
+            departments = db.list_departments(user["id"])
+            values["DEPARTMENT_OPTIONS"] = "".join(
+                f'<option value="{int(d["id"])}">{esc(d["name"])}</option>'
+                for d in departments)
+            values["SLOT_NOTICE"] = (note(
+                "Add a department first before creating appointment slots.", "warn")
+                if not departments else "")
+            values["SLOT_BUTTON_DISABLED"] = "disabled" if not departments else ""
+            values.update(
+                COUNTS=counts_markup(db.business_counts(user["id"]),
+                                     [("Departments", "departments"),
+                                      ("Open slots", "slots_available"),
+                                      ("Appointments", "appointments")]),
+                DEPARTMENTS=department_rows(departments),
+                SLOTS=slot_rows(db.list_slots(user["id"], limit=100)),
+                APPOINTMENTS=appointment_rows(db.list_appointments(user["id"])),
+            )
+        elif vertical == "restaurant":
+            title = "Tables and reservations"
+            values.update(
+                COUNTS=counts_markup(db.business_counts(user["id"]),
+                                     [("Tables", "tables"),
+                                      ("Reservations", "reservations")]),
+                TABLES=table_rows(db.list_tables(user["id"])),
+                RESERVATIONS=reservation_rows(db.list_reservations(user["id"])),
+            )
+        else:
+            # A service business has no inventory, so the page is the agent
+            # itself: the send_summary tools and where its calls go.
+            self._html(page(
+                "setup_service.html", "Setup", nav_for(user),
+                **values,
+                NUMBERS=numbers_table(user["id"]),
+                RECENT_CALLS=calls_table(user["id"], limit=5),
+            ))
+            return
+
+        self._html(page(setup_template_for(user), title, nav_for(user), **values))
+
+    def _setup_back(self, message, kind="ok", path="/setup"):
+        """Back to the account's own setup page with a toast.
+
+        Everything on these pages is a POST/redirect/GET, so a refresh does not
+        resubmit, and the flash survives the round trip through the cookie.
+        """
+        self._redirect(path, flash=message, kind=kind)
+
+    def _publish_agent(self) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        try:
+            agent_id = agent_manager.publish_user_agent(user["id"])
+        except agent_manager.AgentError as err:
+            self._setup_back(str(err), "err")
+            return
+        self._setup_back(f"Your agent is live. Agent id {agent_id}.")
+
+    def _add_room(self, form) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        if vertical_of(user) != "hotel":
+            self._setup_back("That is a hotel setup page.", "err")
+            return
+        number = (form.get("room_number") or "").strip()
+        if not number:
+            self._setup_back("Give the room a number.", "err")
+            return
+        try:
+            capacity = int(form.get("capacity") or 1)
+            price = float(form.get("price_per_night") or 0)
+        except ValueError:
+            self._setup_back("Price and sleepers have to be numbers.", "err")
+            return
+        db.add_room(user["id"], number, form.get("room_type") or "standard",
+                    price, capacity, form.get("amenities"))
+        self._setup_back(f"Room {number} added.")
+
+    def _delete_room(self, form) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        if vertical_of(user) != "hotel":
+            self._setup_back("That is a hotel setup page.", "err")
+            return
+        try:
+            db.delete_room(user["id"], form.get("id"))
+        except (ValueError, TypeError) as err:
+            self._setup_back(str(err) or "That room could not be removed.", "err")
+            return
+        self._setup_back("Room removed.")
+
+    def _add_department(self, form) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        if vertical_of(user) != "hospital":
+            self._setup_back("That is a hospital setup page.", "err")
+            return
+        name = (form.get("name") or "").strip()
+        if not name:
+            self._setup_back("Give the department a name.", "err", "/setup/hospital")
+            return
+        db.add_department(user["id"], name, form.get("description"))
+        self._setup_back(f"Department {name} added.", path="/setup/hospital")
+
+    def _add_slot(self, form) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        if vertical_of(user) != "hospital":
+            self._setup_back("That is a hospital setup page.", "err")
+            return
+        department = (form.get("department_id") or "").strip()
+        when = (form.get("slot_datetime") or "").strip()
+        if not (department and when):
+            self._setup_back("Pick a department and a time for the slot.", "err",
+                             "/setup/hospital")
+            return
+        if not any(str(d["id"]) == department for d in db.list_departments(user["id"])):
+            self._setup_back("That department is not on your list.", "err",
+                             "/setup/hospital")
+            return
+        try:
+            minutes = int(form.get("duration_minutes") or 30)
+        except ValueError:
+            self._setup_back("Length has to be a number of minutes.", "err",
+                             "/setup/hospital")
+            return
+        db.add_slot(user["id"], department, form.get("doctor_name"), when, minutes)
+        self._setup_back("Appointment slot added.", path="/setup/hospital")
+
+    def _delete_slot(self, form) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        if vertical_of(user) != "hospital":
+            self._setup_back("That is a hospital setup page.", "err")
+            return
+        try:
+            db.delete_slot(user["id"], form.get("id"))
+        except (ValueError, TypeError) as err:
+            self._setup_back(str(err) or "That appointment slot could not be removed.",
+                             "err", "/setup/hospital")
+            return
+        self._setup_back("Appointment slot removed.", path="/setup/hospital")
+
+    def _add_table(self, form) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        if vertical_of(user) != "restaurant":
+            self._setup_back("That is a restaurant setup page.", "err")
+            return
+        number = (form.get("table_number") or "").strip()
+        if not number:
+            self._setup_back("Give the table a number.", "err")
+            return
+        try:
+            capacity = int(form.get("capacity") or 2)
+        except ValueError:
+            self._setup_back("Seats has to be a number.", "err")
+            return
+        if capacity < 1:
+            self._setup_back("A table has to seat at least one.", "err")
+            return
+        db.add_table(user["id"], number, capacity)
+        self._setup_back(f"Table {number} added.")
+
+    def _delete_table(self, form) -> None:
+        user = self._require_user()
+        if not user:
+            return
+        if vertical_of(user) != "restaurant":
+            self._setup_back("That is a restaurant setup page.", "err")
+            return
+        try:
+            db.delete_table(user["id"], form.get("id"))
+        except (ValueError, TypeError) as err:
+            self._setup_back(str(err) or "That table could not be removed.", "err")
+            return
+        self._setup_back("Table removed.")
+
     def _file_call(self, args: dict) -> None:
         """Attribute the call to an account, then store it.
 
         The tool posts only the arguments the model filled in, so the number
-        that received the call is not normally present. When it is missing the
-        call is attributed to the first account in the database, which keeps a
-        seeded single-tenant demo working.
+        that received the call is not normally present. Account-stamped agent
+        URLs take precedence; the number and first-user fallbacks keep older
+        agents and a seeded single-tenant demo working.
         """
+        claimed = self._one("account")
+        user = None
+        if claimed and str(claimed).isdigit():
+            user = db.get_user_by_id(int(claimed))
+            if not user:
+                print(f"send_summary: unknown account {claimed}, call not stored", flush=True)
+                return
+
         called = ""
         for key in ("to", "to_number", "phone_number", "called_number"):
             if isinstance(args.get(key), str) and args[key].strip():
@@ -1068,7 +1956,8 @@ class Handler(BaseHTTPRequestHandler):
                 break
 
         owner = db.owner_of_number(called) if called else None
-        user = db.get_user_by_id(owner["user_id"]) if owner else db.first_user()
+        if user is None:
+            user = db.get_user_by_id(owner["user_id"]) if owner else db.first_user()
         if not user:
             print("send_summary: no user in the database, call not stored", flush=True)
             return
@@ -1097,9 +1986,10 @@ def main() -> None:
     db.purge_expired_sessions()
 
     AGENT = resolve_agent()
-    PAGE = ((HERE / "index.html").read_text()
-            .replace("{{AGENT_NAME}}", AGENT["name"])
-            .replace("{{AGENT_JSON}}", json.dumps(AGENT).replace("<", "\\u003c")))
+    # Left as the raw template on purpose. Which agent a session gets depends
+    # on who is signed in, so the agent name and the JSON app.js reads are
+    # filled in per request by _talk_page, not once here.
+    PAGE = (HERE / "index.html").read_text()
 
     # PORT when set, otherwise 3000 and up until one is free.
     fixed = os.environ.get("PORT")

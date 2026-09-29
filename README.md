@@ -47,7 +47,91 @@ The agent's behaviour is entirely in [agents/calldesk.jsonc](agents/calldesk.jso
 - **Each user sees only their own calls.** Every `send_summary` call is filed against the account that owns the receiving number, and the dashboard and call log are scoped to that account.
 - **Twilio bills the customer directly** for their own number and for call usage. CallDesk is an application on top of it and never touches telecom billing.
 
-Storage is SQLite at `data/calldesk.db` (gitignored): `users`, `sessions`, `twilio_connections`, `phone_numbers`, `calls`. [auth.py](auth.py) does PBKDF2-SHA256 password hashing; session tokens live in the `sessions` table, so a restart does not log anyone out.
+Storage is SQLite at `data/calldesk.db` (gitignored): `users`, `sessions`, `twilio_connections`, `phone_numbers`, `calls`, plus the vertical tables below. [auth.py](auth.py) does PBKDF2-SHA256 password hashing; session tokens live in the `sessions` table, so a restart does not log anyone out.
+
+## For Business Owners
+
+CallDesk uses Twilio to receive phone calls. Here's how to connect your number:
+
+1. Create a free Twilio account at [twilio.com/try-twilio](https://www.twilio.com/try-twilio)
+2. Buy a phone number in the [Twilio Console](https://console.twilio.com)
+3. Click "Connect Twilio" in your CallDesk dashboard
+4. Optionally, set up call forwarding from your existing business number
+5. Test by calling your new number
+
+Full step-by-step guide with screenshots and troubleshooting: see `/guide` in the app.
+
+### Costs
+
+- Twilio phone number: ~$1/month
+- Twilio inbound calls: ~$0.0085/minute
+- CallDesk: your subscription
+
+Twilio bills you directly. CallDesk never touches your phone bill.
+
+### Trial Account Limitation
+
+Twilio trial accounts can only receive calls from verified phone numbers. To let your customers reach you, upgrade your Twilio account. The upgrade takes about 2 minutes and requires a credit card.
+
+## Vertical support
+
+An account picks its kind of business at signup, and that choice decides three things: which agent it gets, which setup page it sees, and which tools the agent can call. `users.business_type` is one of `hotel`, `hospital`, `restaurant`, `service`, and `users.agent_id` holds the agent published for that account alone.
+
+| Business | Agent | Setup page | Tools |
+| --- | --- | --- | --- |
+| Hotel | [agents/hotel-agent.jsonc](agents/hotel-agent.jsonc) | `/setup/hotel/rooms` | `check_availability`, `book_room` |
+| Hospital | [agents/hospital-agent.jsonc](agents/hospital-agent.jsonc) | `/setup/hospital/departments`, `/setup/hospital/slots` | `check_slots`, `book_appointment` |
+| Restaurant | [agents/restaurant-agent.jsonc](agents/restaurant-agent.jsonc) | `/setup/restaurant/tables` | `check_tables`, `book_table` |
+| Service | [agents/calldesk.jsonc](agents/calldesk.jsonc) | `/setup` | `send_summary` |
+
+Availability is answered from the database, not from the prompt. An agent never says a room is free unless a row says it is, and every booking is written before the agent confirms it, so two callers cannot take the same room:
+
+```
+Caller  ->  Twilio  ->  their own AssemblyAI agent  ->  check_availability
+                          |                               |
+                          |                    CallDesk server, a real query
+                          |                               |
+                          +--------- book_room  <---------+
+                                     |
+                        hotel_bookings row, then a spoken confirmation
+```
+
+- **Hotel** keeps `hotel_rooms` and `hotel_bookings`. Availability is a date-range overlap, half-open, so a guest leaving on the 3rd can check into the room freed on the 3rd. Occupancy comes from the bookings, not from the room's status, because a room occupied for one night is still free the next.
+- **Hospital** keeps `hospital_departments`, `hospital_slots`, and `hospital_appointments`. Booking is a single conditional `UPDATE ... WHERE status = 'available'`, so the row is only taken if it was still free when that statement ran. An unknown department comes back as an error the agent can read out rather than as "no appointments".
+- **Restaurant** keeps `restaurant_tables` and `restaurant_reservations`. A reservation holds its table for `RESERVATION_HOLD_MINUTES` (120), so 7pm and 8pm on the same table are a conflict even though the timestamps differ.
+
+Every tool answers the same envelope, always with HTTP 200, because a 4xx reads to the agent as a dead endpoint rather than as a reason:
+
+```json
+{"ok": true,  "data": {"available": true, "room_count": 2, "rooms": [...]}}
+{"ok": false, "error": "room 301 is already booked for those dates"}
+```
+
+`POST /setup/publish-agent` publishes the agent for the signed-in account. It reads the base config for that `business_type`, fills in `{business_name}`, and `POST`s it to `/v1/agents`, then stores the returned id on the user row. Each business gets an agent of its own rather than sharing the single agent named by `AGENT`, because a hotel and a clinic need different tools and a greeting that names the business actually calling.
+
+Set `CALLDESK_TOOL_BASE` in `.env` to the public https address of the `/tool` path, for example `https://your-app.onrender.com/tool`. The vertical agents append an endpoint to it. If only `CALLDESK_TOOL_URL` is set, the prefix is derived from it by dropping the last path segment.
+
+To try it with data, run `python seed_business.py` after `python -c "import db; db.init_db()"`. It creates one hotel, one clinic, and one restaurant with the inventory their agents need, and prints the logins. It is safe to run twice: an account that exists is left alone.
+
+### How to add a new vertical
+
+1. **A table per thing you sell.** Add it to `SCHEMA` in [db.py](db.py) with a `user_id` column and a foreign key to `users(id)`, so it is scoped to one tenant. `CREATE TABLE IF NOT EXISTS` in the schema block runs for a new install; add an `ALTER` in `_migrate` for anything that changes an existing table.
+2. **A name in `BUSINESS_TYPES`.** Add it to `BUSINESS_TYPES` and `BUSINESS_TYPE_LABELS` in [db.py](db.py), and a `<select>` option in [templates/signup.html](templates/signup.html).
+3. **A setup template.** Add `templates/setup_<vertical>.html` and register it in `SETUP_TEMPLATE` in [deployment/browser/server.py](deployment/browser/server.py). Add the page to `GET_ONLY`, and the read and delete routes to the two route tables in `do_GET` and `do_POST`.
+4. **A base agent config.** Add `agents/<vertical>-agent.jsonc` as a `POST /v1/agents` body, with one `http` tool per action pointing at `${CALLDESK_TOOL_BASE}/<endpoint>`. A tool with no `http` block is client-executed and cannot answer a phone call. Use `{business_name}` for the account's own name and a voice id from the [voice catalog](https://www.assemblyai.com/docs/voice-agents/voice-agent-api/voices). Add a tool to the agent's system prompt telling it what to do when the tool returns `ok false`, or it will read the error as if it were a result.
+5. **Map it to the config.** Add the vertical to `AGENT_FOR_TYPE` in [agent_manager.py](agent_manager.py) so publishing picks the right file.
+6. **A tool handler.** Add the endpoint to the `vertical_tools` table in `do_POST` and write a handler that calls the db and returns `{"ok": true, "data": ...}`. Let `db` raise `ValueError` with a message written to be spoken: the shared `_tool_run` turns it into `{"ok": false, "error": ...}` and logs it.
+7. **Dashboard stats.** Add a branch to `vertical_summary` so the vertical's counts and recent rows appear on the dashboard.
+8. **Document it.** Add a row to the table above.
+
+### Tool calls and the receiving number
+
+A tool call arrives carrying only the arguments the model filled in, so the number that received the call is usually absent. The handler attributes it in this order:
+
+1. If the body carries `to`, look the number up in `phone_numbers` and use that account. A number bound to a different kind of business is refused rather than served the wrong vertical's data.
+2. Otherwise the oldest account of that vertical answers, and the fallback is logged every time.
+
+Step 2 is what keeps a single-tenant demo working, and it is wrong the moment two hotels are on the account. For a real deployment, put the account in the tool URL — `https://your-app.onrender.com/tool/h/<user_id>/check_availability` — or sign it, so attribution comes from the request rather than from a guess.
 
 Users sign up with an email and password or with Google. A Google sign-in whose email already matches a password account is linked to it rather than creating a duplicate, so signing up twice never orphans call history. [auth.py](auth.py) hashes with PBKDF2-SHA256 and a per-password random salt, compares in constant time, and stores session tokens in the `sessions` table so a restart does not log anyone out. The session cookie is `calldesk_session`, `HttpOnly`, `SameSite=Lax`, `Path=/`. [google_auth.py](google_auth.py) runs the Google handshake with `google-auth` and `google-auth-oauthlib`.
 
@@ -128,6 +212,12 @@ Per number, under **Numbers -> Configure**.
 So CallDesk is the fallback: 20 seconds for you, then the agent. The bin is created and updated in place, so saving repeatedly does not litter the account.
 
 **Call Back** on the calls page places an outbound call from the bound number. Its URL is `/twiml/outbound`, which also redirects into the agent, so you hear CallDesk rather than a ringing phone.
+
+## The onboarding guide
+
+`GET /guide` is the customer-facing version of all of the above, written for a business owner rather than an integrator: create a Twilio account, buy a number, connect it, optionally forward an existing number, then test. It needs no login, so it is readable before signup, and it is linked from the top nav, the footer, the landing page, `/numbers`, and the dashboard.
+
+The dashboard adapts to the account's actual state rather than to a flag. With no Twilio connection it shows the three-step onboarding card; once `twilio_connections` has a row it collapses to a one-line confirmation. Below that, `setup_checklist` in `server.py` derives five items straight from the database — account, connection, a row in `phone_numbers`, a non-null `answering_mode`, and a row in `calls` — so the widget cannot drift from the state it describes, and it disappears once all five are true.
 
 ## Run locally
 

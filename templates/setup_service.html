@@ -1,0 +1,54 @@
+<div class="page-head">
+  <div>
+    <h1>{{BUSINESS_NAME}}</h1>
+    <p class="sub">{{BUSINESS_TYPE_LABEL}}. No inventory to keep in step, so this page is the agent itself.</p>
+  </div>
+  <div class="row-end">
+    <a class="btn btn-secondary" href="/dashboard">Dashboard</a>
+  </div>
+</div>
+
+{{AGENT_BANNER}}
+
+<div class="card">
+  <div class="card-title">How a service call is handled</div>
+  <p class="muted">Your agent answers the call, collects the caller's name, callback number, problem, and how soon they need help, then sends you a summary you can act on from the call log.</p>
+  <ol class="stack-sm muted" style="padding-left:20px">
+    <li>A caller rings one of your numbers.</li>
+    <li>The agent takes the details and reads them back.</li>
+    <li>A summary lands in your call history on the dashboard.</li>
+    <li>You call the caller back from the number you saved.</li>
+  </ol>
+</div>
+
+<div class="card" style="padding:0">
+  <div class="row-between" style="padding:20px 24px 16px">
+    <div class="card-title" style="margin:0">Your numbers</div>
+    <a class="btn btn-ghost btn-sm" href="/numbers">Manage numbers</a>
+  </div>
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{NUMBERS}}
+  </div>
+</div>
+
+<div class="card" style="padding:0">
+  <div class="row-between" style="padding:20px 24px 16px">
+    <div class="card-title" style="margin:0">Recent calls</div>
+    <a class="btn btn-ghost btn-sm" href="/calls">View all calls</a>
+  </div>
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{RECENT_CALLS}}
+  </div>
+</div>
+
+<div class="card">
+  <div class="row-between">
+    <div>
+      <div class="card-title" style="margin:0">{{ACTIVATE_LABEL}}</div>
+      <div class="card-sub">Publishing gives {{BUSINESS_NAME}} an agent of its own, with your business name in the greeting.</div>
+    </div>
+    <form method="post" action="/setup/publish-agent">
+      <button class="btn btn-primary" type="submit">{{ACTIVATE_LABEL}}</button>
+    </form>
+  </div>
+</div>

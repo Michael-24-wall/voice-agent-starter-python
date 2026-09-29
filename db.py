@@ -10,6 +10,7 @@ everyone out.
 
 import os
 import re
+import json
 import sqlite3
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +36,24 @@ CREATE TABLE IF NOT EXISTS users (
     -- The AssemblyAI agent published for this account alone, by
     -- agent_manager.publish_user_agent(). NULL until they activate one.
     agent_id      TEXT,
+    -- 0 until they finish, or skip, their per-vertical setup page. The server
+    -- bounces them back to it while this is 0, so a half-configured account
+    -- cannot go live with a generic prompt.
+    setup_complete INTEGER DEFAULT 0,
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- The per-vertical details the owner typed on the setup page: a hotel's check
+-- -in time, a clinic's departments, a restaurant's cuisine, a plumber's
+-- service list. One row per account. The keys inside profile_json depend on
+-- business_type, and agent_manager.build_system_prompt reads them to write
+-- that account's own system prompt.
+CREATE TABLE IF NOT EXISTS business_profiles (
+    id          INTEGER PRIMARY KEY,
+    user_id     INTEGER UNIQUE,
+    profile_json TEXT,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -221,6 +239,15 @@ def _migrate(conn):
     # they were before this column existed.
     _add_column(conn, "users", "business_type", "TEXT DEFAULT 'service'")
     _add_column(conn, "users", "agent_id", "TEXT")
+    # Per-vertical setup. The column arrives as 0 for everyone, which would
+    # bounce every existing account back to a setup page they have already
+    # done. An account that already has a published agent is left alone; only
+    # one that never activated is asked to finish.
+    _add_column(conn, "users", "setup_complete", "INTEGER DEFAULT 0")
+    conn.execute(
+        "UPDATE users SET setup_complete = 1 "
+        "WHERE (setup_complete IS NULL OR setup_complete = 0) "
+        "AND agent_id IS NOT NULL AND agent_id != ''")
     conn.execute(
         "UPDATE users SET business_type = 'service' "
         "WHERE business_type IS NULL OR business_type = ''")
@@ -376,6 +403,62 @@ def set_user_agent(user_id, agent_id):
     with connect() as conn:
         conn.execute("UPDATE users SET agent_id = ? WHERE id = ?",
                      ((agent_id or "").strip() or None, int(user_id)))
+
+
+def get_setup_complete(user_id):
+    """1 once this account has finished, or skipped, its setup page."""
+    with connect() as conn:
+        row = conn.execute("SELECT setup_complete FROM users WHERE id = ?",
+                           (int(user_id),)).fetchone()
+    if not row:
+        return 0
+    return 1 if row["setup_complete"] else 0
+
+
+def set_setup_complete(user_id, done=True):
+    with connect() as conn:
+        conn.execute("UPDATE users SET setup_complete = ? WHERE id = ?",
+                     (1 if done else 0, int(user_id)))
+
+
+def save_business_profile(user_id, profile):
+    """Store this account's setup-page answers, replacing whatever was there.
+
+    The keys are the vertical's own, so a hotel's check-in time and a plumber's
+    service list share one column rather than a table of mostly-NULL columns.
+    An upsert, because the setup page saves as often as the owner likes.
+    """
+    blob = json.dumps(profile or {}, sort_keys=True)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO business_profiles (user_id, profile_json, updated_at) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "profile_json = excluded.profile_json, updated_at = CURRENT_TIMESTAMP",
+            (int(user_id), blob),
+        )
+
+
+def get_business_profile(user_id):
+    """This account's setup answers as a dict, or an empty one.
+
+    A row that will not parse is treated as no row rather than a 500: the
+    prompt preview and the publish step both read this, and neither should fall
+    over because one account's JSON was truncated.
+    """
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT profile_json FROM business_profiles WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+    if not row or not (row["profile_json"] or "").strip():
+        return {}
+    try:
+        loaded = json.loads(row["profile_json"])
+    except json.JSONDecodeError:
+        print(f"db: unreadable profile for user {int(user_id)}, ignoring it", flush=True)
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def get_user_by_google_id(google_id):
@@ -802,6 +885,27 @@ def add_slot(user_id, department_id, doctor_name, slot_datetime, duration_minute
              int(duration_minutes or 30)),
         )
         return cur.lastrowid
+
+
+def delete_slot(user_id, slot_id):
+    with connect() as conn:
+        slot = conn.execute(
+            "SELECT slot_datetime FROM hospital_slots "
+            "WHERE id = ? AND user_id = ?", (int(slot_id), int(user_id))
+        ).fetchone()
+        if not slot:
+            raise ValueError("that appointment slot is not on your list")
+        booked = conn.execute(
+            "SELECT COUNT(*) FROM hospital_appointments WHERE slot_id = ? "
+            "AND COALESCE(status, 'confirmed') != 'cancelled'", (int(slot_id),)
+        ).fetchone()[0]
+        if booked:
+            raise ValueError("that appointment slot already has a booking")
+        cur = conn.execute(
+            "DELETE FROM hospital_slots WHERE id = ? AND user_id = ?",
+            (int(slot_id), int(user_id)),
+        )
+        return cur.rowcount
 
 
 def list_appointments(user_id, limit=20):

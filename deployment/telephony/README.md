@@ -6,7 +6,7 @@ Attaches your agent to a phone number you own in Twilio. Twilio passes inbound c
 
 ```sh
 git clone https://github.com/AssemblyAI/voice-agent-starter-python
-cd voice-agent-starter-js
+cd voice-agent-starter-python
 ```
 
 ## 2. Add credentials

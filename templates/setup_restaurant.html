@@ -1,0 +1,62 @@
+<div class="page-head">
+  <div>
+    <h1>Tables and reservations</h1>
+    <p class="sub">What your agent can offer when someone calls to book a table.</p>
+  </div>
+  <div class="row-end">
+    <a class="btn btn-secondary" href="/dashboard">Dashboard</a>
+  </div>
+</div>
+
+{{AGENT_BANNER}}
+
+{{COUNTS}}
+
+<div class="card">
+  <div class="row-between" style="margin-bottom:16px">
+    <div class="card-title" style="margin:0">Add a table</div>
+  </div>
+  <form method="post" action="/setup/restaurant/tables">
+    <div class="row" style="gap:12px;align-items:flex-end;flex-wrap:wrap">
+      <div class="form-field" style="flex:0 0 160px">
+        <label for="table_number">Table</label>
+        <input id="table_number" name="table_number" type="text" placeholder="T1" required>
+      </div>
+      <div class="form-field" style="flex:0 0 150px">
+        <label for="capacity">Seats</label>
+        <input id="capacity" name="capacity" type="number" min="1" step="1" value="2" placeholder="2">
+      </div>
+      <button class="btn btn-primary" type="submit">Add table</button>
+    </div>
+  </form>
+</div>
+
+<div class="card" style="padding:0">
+  <div class="row-between" style="padding:20px 24px 16px">
+    <div class="card-title" style="margin:0">Your tables</div>
+  </div>
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{TABLES}}
+  </div>
+</div>
+
+<div class="card" style="padding:0">
+  <div class="row-between" style="padding:20px 24px 16px">
+    <div class="card-title" style="margin:0">Reservations</div>
+  </div>
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{RESERVATIONS}}
+  </div>
+</div>
+
+<div class="card">
+  <div class="row-between">
+    <div>
+      <div class="card-title" style="margin:0">Activate your agent</div>
+      <div class="card-sub">Publishes an agent for {{BUSINESS_NAME}} and starts answering calls.</div>
+    </div>
+    <form method="post" action="/setup/publish-agent">
+      <button class="btn btn-primary" type="submit">{{ACTIVATE_LABEL}}</button>
+    </form>
+  </div>
+</div>

@@ -1,0 +1,78 @@
+<div class="page-head">
+  <div>
+    <h1>Rooms and bookings</h1>
+    <p class="sub">What your agent can offer when someone calls to ask about a stay.</p>
+  </div>
+  <div class="row-end">
+    <a class="btn btn-secondary" href="/dashboard">Dashboard</a>
+  </div>
+</div>
+
+{{AGENT_BANNER}}
+
+{{COUNTS}}
+
+<div class="card">
+  <div class="row-between" style="margin-bottom:16px">
+    <div class="card-title" style="margin:0">Add a room</div>
+  </div>
+  <form method="post" action="/setup/hotel/rooms">
+    <div class="row" style="gap:12px;align-items:flex-end;flex-wrap:wrap">
+      <div class="form-field" style="flex:0 0 110px">
+        <label for="room_number">Room</label>
+        <input id="room_number" name="room_number" type="text" placeholder="101" required>
+      </div>
+      <div class="form-field" style="flex:0 0 150px">
+        <label for="room_type">Type</label>
+        <select id="room_type" name="room_type">
+          <option value="standard">Standard</option>
+          <option value="deluxe">Deluxe</option>
+          <option value="suite">Suite</option>
+        </select>
+      </div>
+      <div class="form-field" style="flex:0 0 130px">
+        <label for="price_per_night">Per night</label>
+        <input id="price_per_night" name="price_per_night" type="number" min="0" step="1" placeholder="120">
+      </div>
+      <div class="form-field" style="flex:0 0 110px">
+        <label for="capacity">Sleeps</label>
+        <input id="capacity" name="capacity" type="number" min="1" step="1" value="2" placeholder="2">
+      </div>
+      <div class="form-field grow">
+        <label for="amenities">Amenities</label>
+        <input id="amenities" name="amenities" type="text" placeholder="WiFi, balcony">
+      </div>
+      <button class="btn btn-primary" type="submit">Add room</button>
+    </div>
+  </form>
+</div>
+
+<div class="card" style="padding:0">
+  <div class="row-between" style="padding:20px 24px 16px">
+    <div class="card-title" style="margin:0">Your rooms</div>
+  </div>
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{ROOMS}}
+  </div>
+</div>
+
+<div class="card" style="padding:0">
+  <div class="row-between" style="padding:20px 24px 16px">
+    <div class="card-title" style="margin:0">Bookings</div>
+  </div>
+  <div class="table-wrap" style="padding-bottom:8px">
+    {{BOOKINGS}}
+  </div>
+</div>
+
+<div class="card">
+  <div class="row-between">
+    <div>
+      <div class="card-title" style="margin:0">Activate your agent</div>
+      <div class="card-sub">Publishes an agent for {{BUSINESS_NAME}} and starts answering calls.</div>
+    </div>
+    <form method="post" action="/setup/publish-agent">
+      <button class="btn btn-primary" type="submit">{{ACTIVATE_LABEL}}</button>
+    </form>
+  </div>
+</div>

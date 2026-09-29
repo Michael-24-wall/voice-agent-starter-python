@@ -1,0 +1,207 @@
+<div class="page-head">
+  <div>
+    <h1>Get connected</h1>
+    <p class="sub">Connect a phone number to CallDesk in about ten minutes. Twilio bills you directly, so CallDesk never touches your phone bill.</p>
+  </div>
+  <div class="row-end">
+    <a class="btn btn-secondary" href="/">Home</a>
+    <a class="btn btn-primary" href="/signup">Create an account</a>
+  </div>
+</div>
+
+<div class="guide-layout">
+  <nav class="guide-toc" aria-label="Onboarding guide contents">
+    <div class="card-title">On this page</div>
+    <a href="#overview">Overview</a>
+    <a href="#step-1">Step 1: Create your Twilio account</a>
+    <a href="#step-2">Step 2: Buy a phone number</a>
+    <a href="#step-3">Step 3: Connect to CallDesk</a>
+    <a href="#step-4">Step 4: Set up call forwarding (optional)</a>
+    <a href="#step-5">Step 5: Test your CallDesk number</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+    <a href="#faq">FAQ</a>
+  </nav>
+
+  <div class="guide-body">
+
+    <section class="card guide-section" id="overview">
+      <h2>Overview</h2>
+      <p>CallDesk uses Twilio to receive phone calls. You bring your own Twilio account, so Twilio bills you directly for call usage. CallDesk never touches your phone bill.</p>
+
+      <h3>What you'll need</h3>
+      <ul>
+        <li>A valid email address</li>
+        <li>A phone number to verify your Twilio account</li>
+        <li>About 10 minutes</li>
+      </ul>
+
+      <h3>What it costs</h3>
+      <ul>
+        <li>Twilio phone number: about $1 per month</li>
+        <li>Inbound calls: about $0.0085 per minute</li>
+        <li>CallDesk's AI receptionist: your CallDesk subscription</li>
+      </ul>
+    </section>
+
+    <section class="card guide-section" id="step-1">
+      <h2>Step 1: Create your Twilio account</h2>
+      <ol>
+        <li>Go to <a href="https://www.twilio.com/try-twilio" rel="noopener">twilio.com/try-twilio</a></li>
+        <li>Sign up with your email address. No credit card required for the trial.</li>
+        <li>Verify your email address.</li>
+        <li>Verify your personal phone number. Twilio will send you a code via SMS.</li>
+        <li>Answer the onboarding questions about what you're building.</li>
+      </ol>
+      <div class="alert alert-info">
+        Your Twilio trial includes $15 in credit and 75 voice minutes. You can test
+        CallDesk without paying anything.
+      </div>
+    </section>
+
+    <section class="card guide-section" id="step-2">
+      <h2>Step 2: Buy a phone number</h2>
+      <ol>
+        <li>Log into the Twilio Console at <a href="https://console.twilio.com" rel="noopener">console.twilio.com</a></li>
+        <li>In the left sidebar, click "Phone Numbers" then "Buy a number".</li>
+        <li>Select your country and make sure the "Voice" capability is checked.</li>
+        <li>Pick a number you like. Click "Buy This Number".</li>
+      </ol>
+      <div class="alert alert-warning">
+        Twilio trial accounts can only receive calls from verified phone numbers. To let
+        your customers call you, you must upgrade your Twilio account. The upgrade takes
+        about 2 minutes and requires a credit card.
+      </div>
+      <div class="alert alert-info">
+        If you want to keep your existing business number, don't worry. You'll set up call
+        forwarding in Step 4. The Twilio number is just the entry point.
+      </div>
+    </section>
+
+    <section class="card guide-section" id="step-3">
+      <h2>Step 3: Connect to CallDesk</h2>
+      <ol>
+        <li>Come back to CallDesk and go to your Dashboard.</li>
+        <li>Click "Connect Twilio".</li>
+        <li>You'll be redirected to Twilio. Log in if asked.</li>
+        <li>Review the permissions CallDesk is requesting and click "Authorize".</li>
+        <li>You'll be redirected back to CallDesk. Your Twilio account is now connected.</li>
+      </ol>
+      <div class="alert alert-info">
+        CallDesk only requests permission to manage phone numbers and route calls. We
+        never see your Twilio password or billing details.
+      </div>
+    </section>
+
+    <section class="card guide-section" id="step-4">
+      <h2>Step 4: Set up call forwarding (optional)</h2>
+      <p>If you want to keep your existing business number and forward calls to CallDesk, follow your phone provider's instructions to enable call forwarding.</p>
+
+      <h3>Common forwarding codes</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>What it does</th><th>What to dial</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Forward all calls</td><td><code>*72</code> followed by the Twilio number</td></tr>
+            <tr><td>Cancel forwarding</td><td><code>*73</code></td></tr>
+            <tr><td>Forward when busy</td><td><code>*90</code> followed by the Twilio number</td></tr>
+            <tr><td>Forward when unanswered</td><td><code>*92</code> followed by the Twilio number</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>These codes work with most carriers, but check with your provider. Some use different codes or require you to set forwarding through their online dashboard.</p>
+
+      <div class="alert alert-warning">
+        Call forwarding may incur charges from your existing phone provider. Check your
+        plan before enabling it.
+      </div>
+      <div class="alert alert-info">
+        Alternatively, you can make the Twilio number your primary business number and skip
+        forwarding entirely.
+      </div>
+    </section>
+
+    <section class="card guide-section" id="step-5">
+      <h2>Step 5: Test your CallDesk number</h2>
+      <ol>
+        <li>From a phone that is not your verified Twilio number, dial your new Twilio number.</li>
+        <li>CallDesk should answer within 2 rings.</li>
+        <li>Have a short conversation. Ask about availability, hours, or whatever your business offers.</li>
+        <li>Hang up.</li>
+        <li>Go to your CallDesk dashboard and check "Recent calls". You should see the call with a full transcript.</li>
+      </ol>
+      <div class="alert alert-info">
+        If you're still on a Twilio trial and you don't hear CallDesk, make sure the phone
+        you're calling from is verified in your Twilio account.
+      </div>
+    </section>
+
+    <section class="card guide-section" id="troubleshooting">
+      <h2>Troubleshooting</h2>
+
+      <div class="alert alert-danger">
+        Never share your Twilio password or auth token with anyone, including people who
+        claim to be CallDesk support. Connecting through CallDesk never requires it.
+      </div>
+
+      <div class="guide-q">
+        <h3>"I can't connect my Twilio account"</h3>
+        <p>Make sure you're logged into the correct Twilio account when you click "Connect Twilio". If you have multiple accounts, log out of Twilio first.</p>
+      </div>
+
+      <div class="guide-q">
+        <h3>"CallDesk doesn't answer my calls"</h3>
+        <p>Check that your Twilio number's voice URL is set correctly. Go to Twilio Console &rarr; Phone Numbers &rarr; your number &rarr; Voice Configuration, and verify it points to the SIP endpoint.</p>
+      </div>
+
+      <div class="guide-q">
+        <h3>"The caller can't hear CallDesk"</h3>
+        <p>This is usually a Twilio trial restriction. Upgrade your Twilio account to remove the verified-numbers-only limit.</p>
+      </div>
+
+      <div class="guide-q">
+        <h3>"I want to use my existing number"</h3>
+        <p>Set up call forwarding as described in Step 4. Your existing number stays with your current provider; calls are just forwarded to the Twilio number.</p>
+      </div>
+    </section>
+
+    <section class="card guide-section" id="faq">
+      <h2>FAQ</h2>
+
+      <div class="guide-q">
+        <h3>Do I have to use Twilio?</h3>
+        <p>Yes, CallDesk currently uses Twilio for phone connectivity. We're working on adding other providers.</p>
+      </div>
+
+      <div class="guide-q">
+        <h3>Can I use my existing phone number?</h3>
+        <p>Yes. Set up call forwarding from your existing number to the Twilio number you buy.</p>
+      </div>
+
+      <div class="guide-q">
+        <h3>How much will Twilio charge me?</h3>
+        <p>About $1 per month for the number and $0.0085 per minute for inbound calls. For a business that receives 100 calls per month at 3 minutes each, that's about $3.50 per month.</p>
+      </div>
+
+      <div class="guide-q">
+        <h3>What happens if I don't upgrade my Twilio account?</h3>
+        <p>Trial accounts can only receive calls from verified numbers. Your customers won't be able to reach you. Upgrade to remove this restriction.</p>
+      </div>
+
+      <div class="guide-q">
+        <h3>Can I cancel anytime?</h3>
+        <p>Yes. You can release your Twilio number and disconnect CallDesk at any time.</p>
+      </div>
+    </section>
+
+    <div class="card guide-cta">
+      <div>
+        <div class="card-title" style="margin:0">Ready when you are</div>
+        <p class="muted" style="margin:0">Create an account, then follow the five steps above.</p>
+      </div>
+      <a class="btn btn-primary btn-lg" href="/signup">Create your account</a>
+    </div>
+
+  </div>
+</div>
