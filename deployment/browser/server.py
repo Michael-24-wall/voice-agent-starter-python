@@ -1771,7 +1771,12 @@ class Handler(BaseHTTPRequestHandler):
         return user
 
     def _tool_run(self, business_type: str, work) -> None:
-        """Run one tool body with the shared envelope around it."""
+        """Run one tool body and return the result directly.
+
+        The agent reads the raw JSON body, so the data is not wrapped in an
+        envelope. An error is returned as {"error": "..."} which the agent
+        can speak.
+        """
         args = self._tool_args()
         if args is None:
             return
@@ -1779,15 +1784,14 @@ class Handler(BaseHTTPRequestHandler):
         if user is None:
             return
         try:
-            self._tool_ok(work(args, user))
+            self._tool_json(work(args, user))
         except ValueError as err:
-            # db raises these with a message meant to be spoken.
             print(f"tool: {business_type} rejected a call: {err}", flush=True)
-            self._tool_fail(str(err))
-        except Exception as err:  # never leak a traceback to the agent
+            self._tool_json({"error": str(err)})
+        except Exception as err:
             print(f"tool: {business_type} failed: {err!r}", flush=True)
-            self._tool_fail("our system could not complete that just now. "
-                            "Please call back in a moment.")
+            self._tool_json({"error": "our system could not complete that "
+                             "just now. Please call back in a moment."})
 
     # hotel
 
@@ -1892,9 +1896,14 @@ class Handler(BaseHTTPRequestHandler):
         def work(args, user):
             tables = db.find_available_tables(
                 user["id"], args.get("datetime"), args.get("party_size"))
+            if not tables:
+                return {"message": "No tables are available at that time. "
+                                   "Offer a different time."}
+            first = tables[0]
             return {
-                "available": bool(tables),
-                "table_count": len(tables),
+                "message": f"{len(tables)} tables are available. "
+                           f"Offer to book table {first['table_number']} "
+                           f"(seats {first['capacity']}) at the requested time.",
                 "tables": [{"table_number": t["table_number"], "capacity": t["capacity"]}
                            for t in tables],
             }
