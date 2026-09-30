@@ -1752,11 +1752,9 @@ class Handler(BaseHTTPRequestHandler):
         return user
 
     def _tool_run(self, business_type: str, work) -> None:
-        """Run one tool body and return the result directly.
+        """Run one tool body and return the result as {"result": "..."} .
 
-        The agent reads the raw JSON body, so the data is not wrapped in an
-        envelope. An error is returned as {"error": "..."} which the agent
-        can speak.
+        The LLM reads a single result string. No nested JSON, no arrays.
         """
         args = self._tool_args()
         if args is None:
@@ -1765,14 +1763,17 @@ class Handler(BaseHTTPRequestHandler):
         if user is None:
             return
         try:
-            self._tool_json(work(args, user))
+            result = work(args, user)
+            if isinstance(result, str):
+                self._tool_json({"result": result})
+            else:
+                self._tool_json(result)
         except ValueError as err:
             print(f"tool: {business_type} rejected a call: {err}", flush=True)
-            self._tool_json({"error": str(err)})
+            self._tool_json({"result": str(err)})
         except Exception as err:
             print(f"tool: {business_type} failed: {err!r}", flush=True)
-            self._tool_json({"error": "our system could not complete that "
-                             "just now. Please call back in a moment."})
+            self._tool_json({"result": "our system could not complete that just now."})
 
     # hotel
 
@@ -1781,21 +1782,27 @@ class Handler(BaseHTTPRequestHandler):
             rooms = db.find_available_rooms(
                 user["id"], args.get("check_in"), args.get("check_out"),
                 args.get("room_type"))
-            return {
-                "available": bool(rooms),
-                "room_count": len(rooms),
-                "rooms": [{"room_number": r["room_number"], "room_type": r["room_type"],
-                           "price_per_night": r["price_per_night"],
-                           "capacity": r["capacity"], "amenities": r["amenities"] or ""}
-                          for r in rooms],
-            }
+            if not rooms:
+                return "No rooms are available for those dates."
+            first = rooms[0]
+            return (
+                f"{len(rooms)} rooms are available. Room "
+                f"{first['room_number']} is a {first['room_type']} at "
+                f"${first['price_per_night']:.0f} per night. "
+                f"Ask the caller if they want to book it."
+            )
         self._tool_run("hotel", work)
 
     def _tool_book_room(self) -> None:
         def work(args, user):
-            return db.book_room(
+            result = db.book_room(
                 user["id"], args.get("room_number"), args.get("guest_name"),
                 args.get("guest_phone"), args.get("check_in"), args.get("check_out"))
+            return (
+                f"Booked room {result['room_number']} for {result['guest_name']} "
+                f"from {result['check_in']} to {result['check_out']}. "
+                f"Confirm this booking to the caller."
+            )
         self._tool_run("hotel", work)
 
     # hospital
@@ -1806,26 +1813,21 @@ class Handler(BaseHTTPRequestHandler):
             department = args.get("department")
             requested_date = args.get("date")
             dept, requested, target = db.schedule_info(user["id"], department, requested_date)
-            result = {"slots": [], "date": target, "next_available": target}
-            if requested_date and target != requested:
-                result["message"] = f"That date is not an operating day. The next available day is {target}."
-            count = db.department_daily_count(user["id"], dept["id"], target)
-            if count >= int(dept["daily_capacity"] or 16):
-                result["message"] = "Department is fully booked on that date."
-                result["next_available"] = db.next_available_date(user["id"], department, target)
-                print(f"check_slots result {json.dumps(result, sort_keys=True)}", flush=True)
-                return result
             slots = db.find_available_slots(user["id"], department, requested_date)
-            result["slots"] = [
-                {"doctor": s["doctor_name"] or "",
-                 "datetime": s["slot_datetime"],
-                 "duration_minutes": s["duration_minutes"]}
-                for s in slots
-            ]
+
             if not slots:
-                result["next_available"] = db.next_available_date(user["id"], department, target)
-            print(f"check_slots result {json.dumps(result, sort_keys=True)}", flush=True)
-            return result
+                next_date = db.next_available_date(user["id"], department, target)
+                return (
+                    f"No openings for {dept['name']} on {target}. "
+                    f"The next available day is {next_date}."
+                )
+
+            times = [s["slot_datetime"] for s in slots[:3]]
+            doctor = slots[0]["doctor_name"] or "the doctor"
+            return (
+                f"{len(slots)} openings for {dept['name']} with {doctor}. "
+                f"Times: {', '.join(times)}. Ask which one the caller wants."
+            )
         self._tool_run("hospital", work)
 
     def _tool_book_appointment(self) -> None:
@@ -1838,7 +1840,10 @@ class Handler(BaseHTTPRequestHandler):
                 email_sender.send_confirmation_email_for_appointment(result["appointment_id"])
             except Exception as err:
                 print(f"Confirmation email failed: {err}", flush=True)
-            return result
+            return (
+                f"Appointment confirmed for {result['datetime']} with "
+                f"{result['department']}. Confirm this to the caller."
+            )
         self._tool_run("hospital", work)
 
     def _tool_triage_symptoms(self) -> None:
@@ -1851,9 +1856,14 @@ class Handler(BaseHTTPRequestHandler):
             emergency = any(word in symptoms.lower() for word in emergency_words)
             if emergency:
                 db.log_call(user["id"], "Emergency triage", "", symptoms, "emergency")
-                return {"risk": "emergency",
-                        "message": "Tell the caller to hang up and call 911 immediately."}
-            return {"risk": "routine"}
+                return (
+                    "This sounds like a medical emergency. Tell the caller to "
+                    "hang up and call 911 immediately. Do NOT book an appointment."
+                )
+            return (
+                "No emergency indicators. Ask the caller which department they "
+                "would like and proceed with booking."
+            )
         self._tool_run("hospital", work)
 
     def _tool_end_call(self) -> None:
@@ -1878,25 +1888,62 @@ class Handler(BaseHTTPRequestHandler):
             tables = db.find_available_tables(
                 user["id"], args.get("datetime"), args.get("party_size"))
             if not tables:
-                return {"message": "No tables are available at that time. "
-                                   "Offer a different time."}
+                return "No tables are available at that time."
             first = tables[0]
-            return {
-                "message": f"{len(tables)} tables are available. "
-                           f"Offer to book table {first['table_number']} "
-                           f"(seats {first['capacity']}) at the requested time.",
-                "tables": [{"table_number": t["table_number"], "capacity": t["capacity"]}
-                           for t in tables],
-            }
+            return (
+                f"{len(tables)} tables are available. Table "
+                f"{first['table_number']} seats {first['capacity']}. "
+                f"Ask the caller if they want to book it."
+            )
         self._tool_run("restaurant", work)
 
     def _tool_book_table(self) -> None:
         def work(args, user):
-            return db.book_table(
+            result = db.book_table(
                 user["id"], args.get("table_number"), args.get("guest_name"),
                 args.get("guest_phone"), args.get("party_size"),
                 args.get("reservation_datetime"))
+            return (
+                f"Reserved table {result['table_number']} for "
+                f"{result['party_size']} at {result['reservation_datetime']}. "
+                f"Confirm this to the caller."
+            )
         self._tool_run("restaurant", work)
+
+    def _ensure_agent_is_current(self, user) -> None:
+        """Re-publish the user's agent if its tool base is stale.
+
+        Runs on every setup page load. If the published agent's tool URL
+        does not match the current CALLDESK_TOOL_URL, it is re-published
+        so new signups always point at the live tunnel.
+        """
+        agent_id = agent_manager.get_user_agent(user["id"])
+        if not agent_id:
+            # No agent yet — publish one now.
+            try:
+                agent_manager.publish_user_agent(user["id"])
+            except Exception as err:
+                print(f"setup auto-publish failed for {user['id']}: {err}", flush=True)
+            return
+
+        # Check the published agent's tool URL against the current base.
+        try:
+            base = os.environ.get("CALLDESK_TOOL_BASE") or ""
+            if not base:
+                url = os.environ.get("CALLDESK_TOOL_URL") or ""
+                if url:
+                    base = url.rsplit("/", 1)[0] if "/" in url else ""
+            if not base:
+                return
+            live = aai(f"/agents/{agent_id}")
+            for tool in live.get("tools", []):
+                url = (tool.get("http") or {}).get("url") or ""
+                if url and not url.startswith(base):
+                    # URL is stale — re-publish
+                    agent_manager.publish_user_agent(user["id"])
+                    return
+        except Exception as err:
+            print(f"setup URL check failed for {user['id']}: {err}", flush=True)
 
     def _setup_page(self, user, path) -> None:
         """Render the setup page for this account's vertical.
@@ -1905,6 +1952,7 @@ class Handler(BaseHTTPRequestHandler):
         template comes from business_type, and /setup/hotel/rooms on a
         restaurant account is refused rather than rendered.
         """
+        self._ensure_agent_is_current(user)
         vertical = vertical_of(user)
         if path != "/setup" and vertical != path.split("/")[2]:
             self._redirect("/setup", flash="That setup page belongs to a different "
@@ -1918,9 +1966,10 @@ class Handler(BaseHTTPRequestHandler):
             "AGENT_ID": esc(agent_id or ""),
             "BUSINESS_NAME": user["business_name"],
             "BUSINESS_TYPE_LABEL": db.BUSINESS_TYPE_LABELS[vertical],
-            # The same button publishes again, so an owner who changes a price
-            # or a room can refresh the agent without hunting for a second one.
-            "ACTIVATE_LABEL": "Update agent" if agent_id else "Activate agent",
+            # The button publishes on demand. After the initial activation,
+            # it stays as "Refresh agent" so an owner who changes a price or
+            # a room can push the update without hunting for a second button.
+            "ACTIVATE_LABEL": "Refresh agent" if agent_id else "Activate agent",
         }
 
         if vertical == "hotel":
@@ -2002,6 +2051,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         db.add_room(user["id"], number, form.get("room_type") or "standard",
                     price, capacity, form.get("amenities"))
+        try:
+            agent_manager.publish_user_agent(user["id"])
+        except Exception as err:
+            print(f"auto-publish after add_room failed: {err}", flush=True)
         self._setup_back(f"Room {number} added.")
 
     def _delete_room(self, form) -> None:
@@ -2039,6 +2092,10 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError) as err:
             self._setup_back(str(err), "err", "/setup/hospital")
             return
+        try:
+            agent_manager.publish_user_agent(user["id"])
+        except Exception as err:
+            print(f"auto-publish after add_department failed: {err}", flush=True)
         self._setup_back(f"Department {name} added.", path="/setup/hospital")
 
     def _update_department(self, form) -> None:
@@ -2058,6 +2115,10 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError) as err:
             self._setup_back(str(err), "err", "/setup/hospital")
             return
+        try:
+            agent_manager.publish_user_agent(user["id"])
+        except Exception as err:
+            print(f"auto-publish after update_department failed: {err}", flush=True)
         self._setup_back("Department schedule saved.", path="/setup/hospital")
 
     def _add_table(self, form) -> None:
@@ -2080,6 +2141,10 @@ class Handler(BaseHTTPRequestHandler):
             self._setup_back("A table has to seat at least one.", "err")
             return
         db.add_table(user["id"], number, capacity)
+        try:
+            agent_manager.publish_user_agent(user["id"])
+        except Exception as err:
+            print(f"auto-publish after add_table failed: {err}", flush=True)
         self._setup_back(f"Table {number} added.")
 
     def _delete_table(self, form) -> None:
